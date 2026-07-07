@@ -147,7 +147,7 @@ final class LocalLLMModelTests: XCTestCase {
         let prompt = LocalModelLibrary.analyticsPrompt(for: [event], configuration: .default)
 
         XCTAssertTrue(prompt.contains("Return compact JSON only"))
-        XCTAssertTrue(prompt.contains("dashboardFocus"))
+        XCTAssertTrue(prompt.contains("commonTriggers"))
         XCTAssertTrue(prompt.contains("Analyze these rows for a dashboard"))
         XCTAssertFalse(prompt.contains("child-friendly sentence"))
     }
@@ -176,8 +176,12 @@ final class LocalLLMModelTests: XCTestCase {
         ```json
         {
           "summary": "Mornings are mostly happy, while evenings show more tired transitions.",
-          "dashboardFocus": "Compare evening mood by activity.",
-          "chartSuggestions": ["Evening mood stacked bars", "Daily average mood line"],
+          "commonTriggers": [
+            {
+              "title": "Clean-up",
+              "explanation": "Clean-up appears with angry or tired moods during evening transitions."
+            }
+          ],
           "notablePatterns": ["Clean-up appears with angry or tired moods."],
           "parentReflectionPrompt": "Which evening transition could be made calmer tomorrow?",
           "ethicalNote": "Use this as reflection, not diagnosis."
@@ -188,8 +192,89 @@ final class LocalLLMModelTests: XCTestCase {
         let insight = LocalLLMAnalyticsParser.parse(modelOutput: output, modelName: "Gemma-4-E2B-it")
 
         XCTAssertEqual(insight.modelName, "Gemma-4-E2B-it")
-        XCTAssertEqual(insight.dashboardFocus, "Compare evening mood by activity.")
-        XCTAssertEqual(insight.chartSuggestions.count, 2)
+        XCTAssertEqual(insight.commonTriggers.first?.title, "Clean-up")
+        XCTAssertEqual(
+            insight.commonTriggers.first?.explanation,
+            "Clean-up appears with angry or tired moods during evening transitions."
+        )
         XCTAssertEqual(insight.ethicalNote, "Use this as reflection, not diagnosis.")
+    }
+
+    func testParsesFoundationModelsObjectNotablePatterns() throws {
+        let output = """
+        ```json
+        {
+          "summary": "Leo's weekly mood patterns reveal a strong connection between nighttime activities and his emotional state.",
+          "commonTriggers": [
+            {
+              "title": "Nighttime Activities",
+              "explanation": "Leo experiences heightened anxiety or excitement during bedtime stories."
+            }
+          ],
+          "notablePatterns": [
+            {
+              "title": "Excited Story Circle",
+              "explanation": "Leo is animated during school story circles."
+            },
+            {
+              "title": "Sad Drop-offs",
+              "explanation": "Mood shifts from happy to sad during school drop-offs."
+            }
+          ],
+          "parentReflectionPrompt": "How can you support transitions?",
+          "ethicalNote": "Use this as reflection, not diagnosis."
+        }
+        ```
+        """
+
+        let insight = LocalLLMAnalyticsParser.parse(modelOutput: output, modelName: "Apple Foundation Models")
+
+        XCTAssertEqual(insight.summary, "Leo's weekly mood patterns reveal a strong connection between nighttime activities and his emotional state.")
+        XCTAssertEqual(insight.commonTriggers.first?.title, "Nighttime Activities")
+        XCTAssertEqual(insight.notablePatterns.count, 2)
+        XCTAssertEqual(
+            insight.notablePatterns.first,
+            "Excited Story Circle: Leo is animated during school story circles."
+        )
+    }
+
+    func testRepairsSavedRawJSONFallbackInsight() throws {
+        let rawOutput = """
+        ```json
+        {
+          "summary": "Transitions are the clearest pattern.",
+          "commonTriggers": [
+            {
+              "title": "Clean-up",
+              "explanation": "Clean-up follows long play sessions."
+            }
+          ],
+          "notablePatterns": [
+            {
+              "title": "Evening Fatigue",
+              "explanation": "Tired moods appear more in the evening."
+            }
+          ],
+          "parentReflectionPrompt": "Which transition could be softened?",
+          "ethicalNote": "Reflective only."
+        }
+        ```
+        """
+        let brokenInsight = GeneratedLLMAnalyticsInsight(
+            modelName: "Apple Foundation Models",
+            summary: rawOutput,
+            commonTriggers: [],
+            notablePatterns: [],
+            parentReflectionPrompt: "What pattern feels most useful to watch over the next few days?",
+            ethicalNote: "Model output is reflective and non-diagnostic."
+        )
+
+        let repaired = LocalLLMAnalyticsParser.repairFallbackInsight(brokenInsight)
+
+        XCTAssertEqual(repaired.id, brokenInsight.id)
+        XCTAssertEqual(repaired.generatedAt, brokenInsight.generatedAt)
+        XCTAssertEqual(repaired.summary, "Transitions are the clearest pattern.")
+        XCTAssertEqual(repaired.commonTriggers.first?.title, "Clean-up")
+        XCTAssertEqual(repaired.notablePatterns.first, "Evening Fatigue: Tired moods appear more in the evening.")
     }
 }

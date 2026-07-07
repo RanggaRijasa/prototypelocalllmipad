@@ -42,6 +42,47 @@ struct ModelSelectionView: View {
                     LabeledContent("Selected", value: selectedEngine.title)
                 }
 
+                Section("Apple Foundation Models") {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: AppleFoundationModelsRuntime.isAvailable ? "sparkles" : "exclamationmark.triangle")
+                            .font(.title3)
+                            .foregroundStyle(AppleFoundationModelsRuntime.isAvailable ? Color.blue : Color.secondary)
+                            .frame(width: 28)
+
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Text(AppleFoundationModelsRuntime.displayName)
+                                    .font(.headline)
+
+                                Spacer()
+
+                                if selectedEngine == .appleFoundationModels {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.tint)
+                                }
+                            }
+
+                            Text(AppleFoundationModelsRuntime.readinessMessage)
+                                .font(.caption)
+                                .foregroundStyle(AppleFoundationModelsRuntime.isAvailable ? Color.secondary : Color.red)
+                        }
+                    }
+
+                    Button {
+                        runtimeSession.offload()
+                        selectedEngineRawValue = AnalysisEngine.appleFoundationModels.rawValue
+                    } label: {
+                        Label(
+                            selectedEngine == .appleFoundationModels ? "Using Apple Foundation Models" : "Use Apple Foundation Models",
+                            systemImage: selectedEngine == .appleFoundationModels ? "checkmark.circle" : "apple.logo"
+                        )
+                    }
+
+                    Text("Uses the same system prompt, context notes, and dashboard data payload as the LiteRT-LM flow. Availability is managed by iOS and Apple Intelligence.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Local Model") {
                     if let installed = library.selectedInstalledModel {
                         LocalModelStatusView(installed: installed, runtimeState: runtimeSession.state)

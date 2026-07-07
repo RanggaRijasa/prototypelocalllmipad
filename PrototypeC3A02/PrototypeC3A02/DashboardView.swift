@@ -45,6 +45,10 @@ struct DashboardView: View {
         return try? JSONDecoder().decode(GeneratedLLMAnalyticsInsight.self, from: generatedInsightData)
     }
 
+    private var selectedEngine: AnalysisEngine {
+        AnalysisEngine(rawValue: selectedEngineRawValue) ?? .simpleRules
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -56,59 +60,62 @@ struct DashboardView: View {
                     )
                 } else {
                     ScrollView {
-                        LazyVGrid(columns: columns, spacing: 16) {
-                            ChartCard(
-                                title: "Mood by Scene",
-                                subtitle: "How moods are distributed across daily moments."
-                            ) {
-                                MoodBucketChart(
-                                    buckets: AnalyticsBuilder.moodBucketsByScene(from: events),
-                                    xTitle: "Scene"
-                                )
-                            }
+                        VStack(spacing: 16) {
+                            LazyVGrid(columns: columns, spacing: 16) {
+                                ChartCard(
+                                    title: "Mood by Scene",
+                                    subtitle: "How moods are distributed across daily moments."
+                                ) {
+                                    MoodBucketChart(
+                                        buckets: AnalyticsBuilder.moodBucketsByScene(from: events),
+                                        xTitle: "Scene"
+                                    )
+                                }
 
-                            ChartCard(
-                                title: "Mood by Place",
-                                subtitle: "Where different moods tend to appear."
-                            ) {
-                                MoodBucketChart(
-                                    buckets: AnalyticsBuilder.moodBucketsByPlace(from: events),
-                                    xTitle: "Place"
-                                )
-                            }
+                                ChartCard(
+                                    title: "Mood by Place",
+                                    subtitle: "Where different moods tend to appear."
+                                ) {
+                                    MoodBucketChart(
+                                        buckets: AnalyticsBuilder.moodBucketsByPlace(from: events),
+                                        xTitle: "Place"
+                                    )
+                                }
 
-                            ChartCard(
-                                title: "Mood over Time",
-                                subtitle: "Average daily mood score from 1 to 6."
-                            ) {
-                                MoodTimelineChart(points: AnalyticsBuilder.dailyMoodPoints(from: events))
-                            }
+                                ChartCard(
+                                    title: "Mood over Time",
+                                    subtitle: "Average daily mood score from 1 to 6."
+                                ) {
+                                    MoodTimelineChart(points: AnalyticsBuilder.dailyMoodPoints(from: events))
+                                }
 
-                            ChartCard(
-                                title: "Event Volume",
-                                subtitle: "How many story entries are logged each day."
-                            ) {
-                                DailyEventCountChart(points: AnalyticsBuilder.dailyEventCounts(from: events))
-                            }
+                                ChartCard(
+                                    title: "Event Volume",
+                                    subtitle: "How many story entries are logged each day."
+                                ) {
+                                    DailyEventCountChart(points: AnalyticsBuilder.dailyEventCounts(from: events))
+                                }
 
-                            ChartCard(
-                                title: "Challenging Moods",
-                                subtitle: "Share of sad, angry, tired, or scared moments by scene."
-                            ) {
-                                SceneChallengeChart(points: AnalyticsBuilder.challengingMoodByScene(from: events))
-                            }
+                                ChartCard(
+                                    title: "Challenging Moods",
+                                    subtitle: "Share of sad, angry, tired, or scared moments by scene."
+                                ) {
+                                    SceneChallengeChart(points: AnalyticsBuilder.challengingMoodByScene(from: events))
+                                }
 
-                            ChartCard(
-                                title: "Top Activities",
-                                subtitle: "Activities that appear most often in the story log."
-                            ) {
-                                ActivityCountChart(points: AnalyticsBuilder.topActivities(from: events))
+                                ChartCard(
+                                    title: "Top Activities",
+                                    subtitle: "Activities that appear most often in the story log."
+                                ) {
+                                    ActivityCountChart(points: AnalyticsBuilder.topActivities(from: events))
+                                }
                             }
 
                             if let generatedInsight {
                                 GeneratedLLMInsightCard(insight: generatedInsight)
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .top)
                         .padding()
                     }
                 }
@@ -150,6 +157,7 @@ struct DashboardView: View {
                     DashboardInsightGenerationSheet(
                         library: library,
                         runtimeSession: runtimeSession,
+                        selectedEngine: selectedEngine,
                         events: events,
                         scope: $insightScope,
                         selectedDate: $insightDate
@@ -163,6 +171,21 @@ struct DashboardView: View {
 
     @MainActor
     private func generateAnalytics(using selectedEvents: [StoryEvent]) async -> Bool {
+        if selectedEngine == .appleFoundationModels {
+            do {
+                let insight = try await AppleFoundationModelsRuntime.generateAnalytics(
+                    events: selectedEvents,
+                    configuration: library.configuration
+                )
+                library.saveGeneratedInsight(insight)
+                selectedEngineRawValue = AnalysisEngine.appleFoundationModels.rawValue
+                return true
+            } catch {
+                library.lastMessage = error.localizedDescription
+                return false
+            }
+        }
+
         guard let installed = library.selectedInstalledModel else {
             library.lastMessage = "Download or select a LiteRT-LM model before generating analytics."
             return false
@@ -253,20 +276,27 @@ private struct DashboardInsightGenerationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var library: LocalModelLibrary
     @ObservedObject var runtimeSession: LocalLLMRuntimeSession
+    let selectedEngine: AnalysisEngine
     let events: [StoryEvent]
     @Binding var scope: DashboardInsightScope
     @Binding var selectedDate: Date
     let onGenerate: ([StoryEvent]) async -> Bool
+    @State private var isGenerating = false
 
     private var scopedEvents: [StoryEvent] {
         dashboardInsightEvents(from: events, scope: scope, selectedDate: selectedDate)
     }
 
     private var canGenerate: Bool {
+        guard !isGenerating else { return false }
+        guard !scopedEvents.isEmpty else { return false }
+        if selectedEngine == .appleFoundationModels {
+            return AppleFoundationModelsRuntime.isAvailable
+        }
+
         guard let installed = library.selectedInstalledModel else { return false }
         return installed.model.runtime == .liteRTLM
             && !runtimeSession.isBusy
-            && !scopedEvents.isEmpty
     }
 
     var body: some View {
@@ -296,7 +326,18 @@ private struct DashboardInsightGenerationSheet: View {
                 }
 
                 Section("Model") {
-                    if let installed = library.selectedInstalledModel {
+                    if selectedEngine == .appleFoundationModels {
+                        Label(AppleFoundationModelsRuntime.displayName, systemImage: "sparkles")
+                            .foregroundStyle(AppleFoundationModelsRuntime.isAvailable ? Color.blue : Color.secondary)
+
+                        Text(AppleFoundationModelsRuntime.readinessMessage)
+                            .font(.caption)
+                            .foregroundStyle(AppleFoundationModelsRuntime.isAvailable ? Color.secondary : Color.red)
+
+                        Text("Uses the same system prompt and context as the local model flow. No downloaded `.litertlm` file is needed.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if let installed = library.selectedInstalledModel {
                         Label(installed.model.name, systemImage: runtimeSession.isLoaded ? "memorychip.fill" : "memorychip")
                             .foregroundStyle(runtimeSession.isLoaded ? .blue : .primary)
 
@@ -332,14 +373,32 @@ private struct DashboardInsightGenerationSheet: View {
                 Section {
                     Button {
                         Task {
+                            isGenerating = true
+                            defer { isGenerating = false }
+
                             if await onGenerate(scopedEvents) {
                                 dismiss()
                             }
                         }
                     } label: {
-                        Label("Generate Dashboard Insight", systemImage: "sparkles")
+                        if isGenerating {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                    .controlSize(.small)
+
+                                Text("Generating Insight")
+                            }
+                        } else {
+                            Label("Generate Dashboard Insight", systemImage: "sparkles")
+                        }
                     }
                     .disabled(!canGenerate)
+
+                    if isGenerating {
+                        Text("Analyzing \(scopedEvents.count) story events...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
                     if scopedEvents.isEmpty {
                         Text("There are no story events in this data range.")
@@ -357,11 +416,13 @@ private struct DashboardInsightGenerationSheet: View {
                 }
             }
             .navigationTitle("Generate Insight")
+            .interactiveDismissDisabled(isGenerating)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
                         dismiss()
                     }
+                    .disabled(isGenerating)
                 }
             }
         }

@@ -56,6 +56,7 @@ enum AnalysisEngine: String, CaseIterable, Identifiable {
     case simpleRules
     case coreMLClassifier
     case localLLM
+    case appleFoundationModels
     case llmSummariser
 
     var id: String { rawValue }
@@ -65,6 +66,7 @@ enum AnalysisEngine: String, CaseIterable, Identifiable {
         case .simpleRules: "Simple Rules"
         case .coreMLClassifier: "Core ML Classifier"
         case .localLLM: "Local LLM"
+        case .appleFoundationModels: "Apple Foundation Models"
         case .llmSummariser: "LLM Summariser"
         }
     }
@@ -77,6 +79,8 @@ enum AnalysisEngine: String, CaseIterable, Identifiable {
             "Loads a downloaded or bundled Core ML model and attempts mood classification from scene, place, and activity features."
         case .localLLM:
             "Loads a LiteRT-LM model on device to generate structured dashboard insights from local story data."
+        case .appleFoundationModels:
+            "Uses Apple's on-device system language model to generate private dashboard insights from local story data."
         case .llmSummariser:
             "Legacy placeholder for a future summariser. Use Local LLM for the new on-device model flow."
         }
@@ -90,6 +94,8 @@ enum AnalysisEngine: String, CaseIterable, Identifiable {
             "Demo model slot. Train a small labelled classifier outside the app, then download a .mlmodel file here."
         case .localLLM:
             "Use `.litertlm` files from the curated Gemma catalog or Hugging Face import. The app loads the model into RAM only when requested."
+        case .appleFoundationModels:
+            "No download is managed by this app. Availability depends on Apple Intelligence support, user settings, and the system model being ready."
         case .llmSummariser:
             "Superseded by the Local LLM flow."
         }

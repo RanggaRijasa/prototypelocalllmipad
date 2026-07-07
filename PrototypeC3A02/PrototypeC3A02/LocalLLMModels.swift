@@ -139,8 +139,8 @@ struct GeneratedLLMCommonTrigger: Codable, Equatable, Identifiable {
 
     init(from decoder: Decoder) throws {
         if let container = try? decoder.container(keyedBy: CodingKeys.self) {
-            title = try container.decodeIfPresent(String.self, forKey: .title) ?? "Trigger"
-            explanation = try container.decodeIfPresent(String.self, forKey: .explanation) ?? ""
+            title = try container.decodeFirstPresentString(forKeys: [.title, .trigger, .label, .name]) ?? "Trigger"
+            explanation = try container.decodeFirstPresentString(forKeys: [.explanation, .reason, .description, .details]) ?? ""
             return
         }
 
@@ -149,9 +149,21 @@ struct GeneratedLLMCommonTrigger: Codable, Equatable, Identifiable {
         explanation = "This trigger appeared in the generated model output, but no explanation was provided."
     }
 
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(title, forKey: .title)
+        try container.encode(explanation, forKey: .explanation)
+    }
+
     private enum CodingKeys: String, CodingKey {
         case title
+        case trigger
+        case label
+        case name
         case explanation
+        case reason
+        case description
+        case details
     }
 }
 
@@ -234,6 +246,32 @@ enum LocalLLMAnalyticsParser {
         )
     }
 
+    static func repairFallbackInsight(_ insight: GeneratedLLMAnalyticsInsight) -> GeneratedLLMAnalyticsInsight {
+        guard insight.commonTriggers.isEmpty,
+              insight.notablePatterns.isEmpty,
+              looksLikeRawJSON(insight.summary) else {
+            return insight
+        }
+
+        let repaired = parse(modelOutput: insight.summary, modelName: insight.modelName)
+        guard repaired.summary != insight.summary
+            || !repaired.commonTriggers.isEmpty
+            || !repaired.notablePatterns.isEmpty else {
+            return insight
+        }
+
+        return GeneratedLLMAnalyticsInsight(
+            id: insight.id,
+            modelName: insight.modelName,
+            generatedAt: insight.generatedAt,
+            summary: repaired.summary,
+            commonTriggers: repaired.commonTriggers,
+            notablePatterns: repaired.notablePatterns,
+            parentReflectionPrompt: repaired.parentReflectionPrompt,
+            ethicalNote: repaired.ethicalNote
+        )
+    }
+
     private static func extractJSONObject(from text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("{"), trimmed.hasSuffix("}") {
@@ -247,6 +285,13 @@ enum LocalLLMAnalyticsParser {
         }
 
         return String(trimmed[start...end])
+    }
+
+    private static func looksLikeRawJSON(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.hasPrefix("{")
+            || trimmed.hasPrefix("```")
+            || (trimmed.contains("\"summary\"") && trimmed.contains("\"commonTriggers\""))
     }
 
     private struct Payload: Decodable {
@@ -268,10 +313,78 @@ enum LocalLLMAnalyticsParser {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
             commonTriggers = try container.decodeIfPresent([GeneratedLLMCommonTrigger].self, forKey: .commonTriggers) ?? []
-            notablePatterns = try container.decodeIfPresent([String].self, forKey: .notablePatterns) ?? []
+            notablePatterns = try container.decodeFlexibleStringArray(forKey: .notablePatterns)
             parentReflectionPrompt = try container.decodeIfPresent(String.self, forKey: .parentReflectionPrompt) ?? ""
             ethicalNote = try container.decodeIfPresent(String.self, forKey: .ethicalNote) ?? ""
         }
+    }
+
+    fileprivate struct FlexibleInsightText: Decodable {
+        let value: String
+
+        init(from decoder: Decoder) throws {
+            if let container = try? decoder.singleValueContainer(),
+               let text = try? container.decode(String.self) {
+                value = text
+                return
+            }
+
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let title = try container.decodeFirstPresentString(forKeys: [.title, .pattern, .label, .name])
+            let explanation = try container.decodeFirstPresentString(forKeys: [.explanation, .description, .details, .text, .summary])
+
+            switch (title?.trimmingCharacters(in: .whitespacesAndNewlines), explanation?.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            case let (.some(title), .some(explanation)) where !title.isEmpty && !explanation.isEmpty:
+                value = "\(title): \(explanation)"
+            case let (.some(title), _) where !title.isEmpty:
+                value = title
+            case let (_, .some(explanation)) where !explanation.isEmpty:
+                value = explanation
+            default:
+                value = ""
+            }
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case title
+            case pattern
+            case label
+            case name
+            case explanation
+            case description
+            case details
+            case text
+            case summary
+        }
+    }
+}
+
+private extension KeyedDecodingContainer where Key: CodingKey {
+    func decodeFirstPresentString(forKeys keys: [Key]) throws -> String? {
+        for key in keys {
+            if let value = try decodeIfPresent(String.self, forKey: key),
+               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return value
+            }
+        }
+
+        return nil
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decodeFlexibleStringArray(forKey key: Key) throws -> [String] {
+        if let strings = try? decodeIfPresent([String].self, forKey: key) {
+            return strings
+        }
+
+        if let items = try? decodeIfPresent([LocalLLMAnalyticsParser.FlexibleInsightText].self, forKey: key) {
+            return items
+                .map(\.value)
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+
+        return []
     }
 }
 
@@ -652,10 +765,12 @@ final class LocalModelLibrary: ObservableObject {
         let repairedInstalledModels = savedInstalledModels.map(Self.repairedInstalledModel)
         self.installedModels = repairedInstalledModels
         self.customModels = Self.load([LocalLLMModel].self, key: Self.customModelsKey) ?? []
-        self.generatedInsight = Self.load(
+        let savedGeneratedInsight = Self.load(
             GeneratedLLMAnalyticsInsight.self,
             key: Self.generatedInsightUserDefaultsKey
         )
+        let repairedGeneratedInsight = savedGeneratedInsight.map(LocalLLMAnalyticsParser.repairFallbackInsight)
+        self.generatedInsight = repairedGeneratedInsight
         self.selectedModelID = UserDefaults.standard.string(forKey: Self.selectedModelIDKey)
         let savedConfiguration = Self.load(LocalLLMConfiguration.self, key: Self.configurationKey) ?? .default
         self.configuration = Self.sanitizedConfiguration(savedConfiguration)
@@ -667,6 +782,10 @@ final class LocalModelLibrary: ObservableObject {
 
         if savedConfiguration != configuration {
             Self.save(configuration, key: Self.configurationKey)
+        }
+
+        if savedGeneratedInsight != repairedGeneratedInsight, let repairedGeneratedInsight {
+            Self.save(repairedGeneratedInsight, key: Self.generatedInsightUserDefaultsKey)
         }
 
         repairCompletedDownloads(showMessage: false)
@@ -841,6 +960,7 @@ final class LocalModelLibrary: ObservableObject {
 
         Task:
         Analyze these rows for a dashboard. Return JSON only using the schema from the system prompt.
+        Return bare JSON without markdown fences. `commonTriggers` must be objects with title and explanation. `notablePatterns` must be plain strings, not objects.
         Keep the response compact, complete, and under \(min(max(configuration.maxTokens, 128), 512)) output tokens.
         """
     }
