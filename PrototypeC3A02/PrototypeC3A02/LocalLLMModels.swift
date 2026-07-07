@@ -50,17 +50,25 @@ struct LocalLLMConfiguration: Codable, Equatable {
     Analyze parent-logged child story events and produce dashboard-ready insight only.
     Do not chat with the parent. Do not diagnose, label, or make medical claims.
     Prefer concrete patterns from the supplied rows over generic parenting advice.
+    Do not invent research claims or parenting recommendations; the app chooses those from a curated source library.
 
     Return compact JSON only, with these exact keys:
     {
-      "summary": "One concise paragraph explaining the most useful weekly pattern.",
+      "summary": "One concise paragraph with the overall insight. Do not repeat every pattern here.",
       "commonTriggers": [
         {
           "title": "One short trigger label, such as Nighttime, Hunger, Homework, Drop-off, or Transition.",
           "explanation": "A grounded explanation of why this may trigger the child, using only the supplied rows."
         }
       ],
-      "notablePatterns": ["Three grounded patterns, each tied to scene, place, mood, or time."],
+      "observedPatterns": [
+        {
+          "title": "Short evidence label, not a recommendation.",
+          "evidence": "One concrete observation tied to count, scene, place, mood, time, activity, reason, or note.",
+          "linkedTrigger": "Optional title from commonTriggers.",
+          "contextTags": ["Optional short tags from the rows, such as Night, Home, Scared"]
+        }
+      ],
       "parentReflectionPrompt": "One gentle non-diagnostic question for the parent.",
       "ethicalNote": "A short privacy and non-diagnosis reminder."
     }
@@ -167,15 +175,132 @@ struct GeneratedLLMCommonTrigger: Codable, Equatable, Identifiable {
     }
 }
 
+struct GeneratedLLMObservedPattern: Codable, Equatable, Identifiable {
+    var title: String
+    var evidence: String
+    var linkedTrigger: String?
+    var contextTags: [String]
+
+    var id: String {
+        "\(title)-\(evidence)"
+    }
+
+    var displayText: String {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEvidence = evidence.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else { return trimmedEvidence }
+        guard !trimmedEvidence.isEmpty else { return trimmedTitle }
+        return "\(trimmedTitle): \(trimmedEvidence)"
+    }
+
+    init(
+        title: String,
+        evidence: String,
+        linkedTrigger: String? = nil,
+        contextTags: [String] = []
+    ) {
+        self.title = title
+        self.evidence = evidence
+        self.linkedTrigger = linkedTrigger
+        self.contextTags = contextTags
+    }
+
+    init(from decoder: Decoder) throws {
+        if let container = try? decoder.container(keyedBy: CodingKeys.self) {
+            title = try container.decodeFirstPresentString(forKeys: [.title, .pattern, .label, .name]) ?? "Evidence from Logs"
+            evidence = try container.decodeFirstPresentString(forKeys: [.evidence, .explanation, .description, .details, .text, .summary]) ?? ""
+            linkedTrigger = try container.decodeFirstPresentString(forKeys: [.linkedTrigger, .trigger, .basedOnTrigger])
+            contextTags = (try? container.decodeIfPresent([String].self, forKey: .contextTags))
+                ?? (try? container.decodeIfPresent([String].self, forKey: .tags))
+                ?? []
+            return
+        }
+
+        let container = try decoder.singleValueContainer()
+        title = "Evidence from Logs"
+        evidence = try container.decode(String.self)
+        linkedTrigger = nil
+        contextTags = []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(title, forKey: .title)
+        try container.encode(evidence, forKey: .evidence)
+        try container.encodeIfPresent(linkedTrigger, forKey: .linkedTrigger)
+        try container.encode(contextTags, forKey: .contextTags)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case title
+        case pattern
+        case label
+        case name
+        case evidence
+        case explanation
+        case description
+        case details
+        case text
+        case summary
+        case linkedTrigger
+        case trigger
+        case basedOnTrigger
+        case contextTags
+        case tags
+    }
+}
+
+struct GeneratedLLMParentRecommendation: Codable, Equatable, Identifiable {
+    var id: String
+    var title: String
+    var action: String
+    var whyItHelps: String
+    var basedOnTrigger: String
+    var basedOnEvidence: String
+    var sourceLabels: [String]
+    var sourceURL: String?
+}
+
 struct GeneratedLLMAnalyticsInsight: Codable, Equatable, Identifiable {
     var id: UUID
     var modelName: String
     var generatedAt: Date
     var summary: String
     var commonTriggers: [GeneratedLLMCommonTrigger]
-    var notablePatterns: [String]
+    var observedPatterns: [GeneratedLLMObservedPattern]
+    var parentRecommendations: [GeneratedLLMParentRecommendation]
     var parentReflectionPrompt: String
     var ethicalNote: String
+
+    var notablePatterns: [String] {
+        observedPatterns.map(\.displayText)
+    }
+
+    init(
+        id: UUID = UUID(),
+        modelName: String,
+        generatedAt: Date = Date(),
+        summary: String,
+        commonTriggers: [GeneratedLLMCommonTrigger],
+        observedPatterns: [GeneratedLLMObservedPattern],
+        parentRecommendations: [GeneratedLLMParentRecommendation]? = nil,
+        parentReflectionPrompt: String,
+        ethicalNote: String
+    ) {
+        self.id = id
+        self.modelName = modelName
+        self.generatedAt = generatedAt
+        self.summary = summary
+        self.commonTriggers = commonTriggers
+        self.observedPatterns = observedPatterns
+        self.parentRecommendations = parentRecommendations ?? ParentRecommendationCatalog.recommendations(
+            summary: summary,
+            commonTriggers: commonTriggers,
+            observedPatterns: observedPatterns
+        )
+        self.parentReflectionPrompt = parentReflectionPrompt
+        self.ethicalNote = ethicalNote
+    }
 
     init(
         id: UUID = UUID(),
@@ -187,14 +312,18 @@ struct GeneratedLLMAnalyticsInsight: Codable, Equatable, Identifiable {
         parentReflectionPrompt: String,
         ethicalNote: String
     ) {
-        self.id = id
-        self.modelName = modelName
-        self.generatedAt = generatedAt
-        self.summary = summary
-        self.commonTriggers = commonTriggers
-        self.notablePatterns = notablePatterns
-        self.parentReflectionPrompt = parentReflectionPrompt
-        self.ethicalNote = ethicalNote
+        self.init(
+            id: id,
+            modelName: modelName,
+            generatedAt: generatedAt,
+            summary: summary,
+            commonTriggers: commonTriggers,
+            observedPatterns: notablePatterns.map {
+                GeneratedLLMObservedPattern(title: "Evidence from Logs", evidence: $0)
+            },
+            parentReflectionPrompt: parentReflectionPrompt,
+            ethicalNote: ethicalNote
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -203,7 +332,9 @@ struct GeneratedLLMAnalyticsInsight: Codable, Equatable, Identifiable {
         case generatedAt
         case summary
         case commonTriggers
+        case observedPatterns
         case notablePatterns
+        case parentRecommendations
         case parentReflectionPrompt
         case ethicalNote
     }
@@ -215,9 +346,251 @@ struct GeneratedLLMAnalyticsInsight: Codable, Equatable, Identifiable {
         generatedAt = try container.decodeIfPresent(Date.self, forKey: .generatedAt) ?? Date()
         summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
         commonTriggers = try container.decodeIfPresent([GeneratedLLMCommonTrigger].self, forKey: .commonTriggers) ?? []
-        notablePatterns = try container.decodeIfPresent([String].self, forKey: .notablePatterns) ?? []
+        let decodedObservedPatterns = try container.decodeFlexibleObservedPatternArray(forKey: .observedPatterns)
+        observedPatterns = decodedObservedPatterns.isEmpty
+            ? try container.decodeFlexibleObservedPatternArray(forKey: .notablePatterns)
+            : decodedObservedPatterns
+        let decodedRecommendations = try container.decodeIfPresent(
+            [GeneratedLLMParentRecommendation].self,
+            forKey: .parentRecommendations
+        ) ?? []
+        parentRecommendations = decodedRecommendations.isEmpty
+            ? ParentRecommendationCatalog.recommendations(
+                summary: summary,
+                commonTriggers: commonTriggers,
+                observedPatterns: observedPatterns
+            )
+            : decodedRecommendations
         parentReflectionPrompt = try container.decodeIfPresent(String.self, forKey: .parentReflectionPrompt) ?? ""
         ethicalNote = try container.decodeIfPresent(String.self, forKey: .ethicalNote) ?? ""
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(modelName, forKey: .modelName)
+        try container.encode(generatedAt, forKey: .generatedAt)
+        try container.encode(summary, forKey: .summary)
+        try container.encode(commonTriggers, forKey: .commonTriggers)
+        try container.encode(observedPatterns, forKey: .observedPatterns)
+        try container.encode(parentRecommendations, forKey: .parentRecommendations)
+        try container.encode(parentReflectionPrompt, forKey: .parentReflectionPrompt)
+        try container.encode(ethicalNote, forKey: .ethicalNote)
+    }
+}
+
+enum ParentRecommendationCatalog {
+    private static let templates: [Template] = [
+        Template(
+            id: "predictable-routines",
+            title: "Preview the next step",
+            action: "Before the trigger time, give one short preview of what comes next and keep the sequence consistent.",
+            whyItHelps: "Predictable routines and simple rules make transitions easier to understand and give the child a clearer sense of what to expect.",
+            sourceLabels: ["CDC"],
+            sourceURL: "https://www.cdc.gov/parenting-toddlers/structure-rules/index.html",
+            keywords: [
+                "bedtime", "night", "nighttime", "drop-off", "drop off", "school",
+                "clean-up", "cleanup", "transition", "screen-off", "getting dressed",
+                "homework", "routine", "leaving"
+            ]
+        ),
+        Template(
+            id: "emotion-coaching",
+            title: "Name the feeling first",
+            action: "Start by calmly naming the likely feeling, then describe the next small step in plain language.",
+            whyItHelps: "Emotion coaching helps children notice and name feelings before they are expected to solve the problem.",
+            sourceLabels: ["CDC"],
+            sourceURL: "https://www.cdc.gov/parenting-toddlers/noticing-and-naming/emotion-coaching.html",
+            keywords: [
+                "sad", "scared", "afraid", "angry", "tired", "cry", "shadow",
+                "storm", "goodbye", "new", "frustrated", "overwhelmed"
+            ]
+        ),
+        Template(
+            id: "calm-limits-choices",
+            title: "Use a calm limit with two choices",
+            action: "State the limit positively, then offer two acceptable choices the child can act on right away.",
+            whyItHelps: "Positive discipline guidance emphasizes calm, consistent limits and choices that help children cooperate without shame or harsh punishment.",
+            sourceLabels: ["AAP", "CDC"],
+            sourceURL: "https://www.healthychildren.org/English/family-life/family-dynamics/communication-discipline/Pages/Disciplining-Your-Child.aspx",
+            keywords: [
+                "angry", "clean-up", "cleanup", "screen-off", "screen", "sharing",
+                "candy", "wanted", "more play", "resistance", "limit", "conflict"
+            ]
+        ),
+        Template(
+            id: "positive-attention",
+            title: "Catch the cooperative moment",
+            action: "When the child takes even one helpful step, describe exactly what they did well.",
+            whyItHelps: "Specific positive attention reinforces the behaviors parents want to see more often and makes expectations easier to repeat.",
+            sourceLabels: ["CDC", "AAP"],
+            sourceURL: "https://www.cdc.gov/parenting-toddlers/about/index.html",
+            keywords: [
+                "happy", "helper", "proud", "cooperated", "independently", "calm",
+                "finished", "shared", "teacher greeted", "friend", "choice"
+            ]
+        ),
+        Template(
+            id: "serve-return-connection",
+            title: "Follow with a quick connection loop",
+            action: "Notice what the child is showing, respond warmly, then pause for their next signal before moving on.",
+            whyItHelps: "Responsive serve-and-return interactions strengthen communication and help children feel understood during emotionally loaded moments.",
+            sourceLabels: ["Harvard"],
+            sourceURL: "https://developingchild.harvard.edu/key-concept/serve-and-return/",
+            keywords: [
+                "story", "asked", "questions", "feelings", "pretend", "drawing",
+                "reflection", "wanted", "scared", "sad", "talkative", "reassurance"
+            ]
+        ),
+        Template(
+            id: "body-needs-check",
+            title: "Check rest and hunger before coaching",
+            action: "If the pattern appears around meals, long days, or skipped rest, handle the body need before asking for cooperation.",
+            whyItHelps: "Children have an easier time using language and coping skills when tiredness, hunger, or overstimulation is reduced first.",
+            sourceLabels: ["CDC"],
+            sourceURL: "https://www.cdc.gov/parenting-toddlers/about/index.html",
+            keywords: [
+                "hungry", "breakfast", "lunch", "snack", "tired", "restless",
+                "skipped nap", "long day", "busy", "noisy", "meal"
+            ]
+        )
+    ]
+
+    static func recommendations(
+        summary: String,
+        commonTriggers: [GeneratedLLMCommonTrigger],
+        observedPatterns: [GeneratedLLMObservedPattern],
+        limit: Int = 3
+    ) -> [GeneratedLLMParentRecommendation] {
+        let normalizedLimit = max(1, limit)
+        let ranked = templates.map { template in
+            (
+                template: template,
+                score: template.score(
+                    summary: summary,
+                    commonTriggers: commonTriggers,
+                    observedPatterns: observedPatterns
+                )
+            )
+        }
+        .sorted {
+            if $0.score == $1.score {
+                return $0.template.id < $1.template.id
+            }
+            return $0.score > $1.score
+        }
+
+        var selected = ranked.filter { $0.score > 0 }
+        let fallbackIDs = ["predictable-routines", "emotion-coaching", "serve-return-connection"]
+        for fallbackID in fallbackIDs {
+            guard let template = templates.first(where: { $0.id == fallbackID }),
+                  !selected.contains(where: { $0.template.id == fallbackID }) else {
+                continue
+            }
+            selected.append((template, 0))
+        }
+
+        for rankedTemplate in ranked where selected.count < normalizedLimit {
+            guard !selected.contains(where: { $0.template.id == rankedTemplate.template.id }) else {
+                continue
+            }
+            selected.append(rankedTemplate)
+        }
+
+        return selected
+            .prefix(normalizedLimit)
+            .map { rankedTemplate in
+                rankedTemplate.template.makeRecommendation(
+                    summary: summary,
+                    commonTriggers: commonTriggers,
+                    observedPatterns: observedPatterns
+                )
+            }
+    }
+
+    private struct Template {
+        let id: String
+        let title: String
+        let action: String
+        let whyItHelps: String
+        let sourceLabels: [String]
+        let sourceURL: String
+        let keywords: [String]
+
+        func score(
+            summary: String,
+            commonTriggers: [GeneratedLLMCommonTrigger],
+            observedPatterns: [GeneratedLLMObservedPattern]
+        ) -> Int {
+            let triggerText = commonTriggers
+                .flatMap { [$0.title, $0.explanation] }
+                .joined(separator: " ")
+            let patternText = observedPatterns
+                .flatMap { pattern in
+                    [pattern.title, pattern.evidence, pattern.linkedTrigger ?? ""] + pattern.contextTags
+                }
+                .joined(separator: " ")
+
+            return score(against: triggerText) * 3
+                + score(against: patternText) * 2
+                + score(against: summary)
+        }
+
+        private func score(against text: String) -> Int {
+            let normalized = text.lowercased()
+            return keywords.reduce(0) { score, keyword in
+                normalized.contains(keyword) ? score + 1 : score
+            }
+        }
+
+        func makeRecommendation(
+            summary: String,
+            commonTriggers: [GeneratedLLMCommonTrigger],
+            observedPatterns: [GeneratedLLMObservedPattern]
+        ) -> GeneratedLLMParentRecommendation {
+            let matchedTrigger = commonTriggers.first { trigger in
+                matches(trigger.title) || matches(trigger.explanation)
+            } ?? commonTriggers.first
+            let matchedPattern = observedPatterns.first { pattern in
+                matches(pattern.title)
+                    || matches(pattern.evidence)
+                    || pattern.contextTags.contains(where: matches)
+                    || pattern.linkedTrigger.map(matches) == true
+            } ?? observedPatterns.first
+
+            let safeSummary = safeEvidenceFallback(from: summary)
+            let basedOnTrigger = matchedTrigger?.title ?? "Overall insight"
+            let basedOnEvidence = matchedPattern?.displayText
+                ?? matchedTrigger?.explanation
+                ?? safeSummary
+
+            return GeneratedLLMParentRecommendation(
+                id: id,
+                title: title,
+                action: action,
+                whyItHelps: whyItHelps,
+                basedOnTrigger: basedOnTrigger,
+                basedOnEvidence: basedOnEvidence.isEmpty ? "Generated from the available story log patterns." : basedOnEvidence,
+                sourceLabels: sourceLabels,
+                sourceURL: sourceURL
+            )
+        }
+
+        private func matches(_ value: String) -> Bool {
+            let normalized = value.lowercased()
+            return keywords.contains { normalized.contains($0) }
+        }
+
+        private func safeEvidenceFallback(from summary: String) -> String {
+            let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("{")
+                || trimmed.hasPrefix("```")
+                || (trimmed.contains("\"summary\"") && trimmed.contains("\"commonTriggers\"")) {
+                return ""
+            }
+
+            return trimmed
+        }
     }
 }
 
@@ -226,39 +599,29 @@ enum LocalLLMAnalyticsParser {
         let jsonString = extractJSONObject(from: modelOutput)
         if let data = jsonString.data(using: .utf8),
            let payload = try? JSONDecoder().decode(Payload.self, from: data) {
-            return GeneratedLLMAnalyticsInsight(
-                modelName: modelName,
-                summary: payload.summary,
-                commonTriggers: payload.commonTriggers,
-                notablePatterns: payload.notablePatterns,
-                parentReflectionPrompt: payload.parentReflectionPrompt,
-                ethicalNote: payload.ethicalNote
-            )
+            return insight(from: ParsedPayload(payload), modelName: modelName)
+        }
+
+        if let payload = salvagePayload(from: jsonString), payload.hasUsableContent {
+            return insight(from: payload, modelName: modelName)
         }
 
         return GeneratedLLMAnalyticsInsight(
             modelName: modelName,
-            summary: modelOutput.trimmingCharacters(in: .whitespacesAndNewlines),
+            summary: fallbackSummary(from: modelOutput),
             commonTriggers: [],
-            notablePatterns: [],
+            observedPatterns: [],
             parentReflectionPrompt: "What pattern feels most useful to watch over the next few days?",
             ethicalNote: "Model output is reflective and non-diagnostic."
         )
     }
 
     static func repairFallbackInsight(_ insight: GeneratedLLMAnalyticsInsight) -> GeneratedLLMAnalyticsInsight {
-        guard insight.commonTriggers.isEmpty,
-              insight.notablePatterns.isEmpty,
-              looksLikeRawJSON(insight.summary) else {
+        guard looksLikeRawJSON(insight.summary) else {
             return insight
         }
 
         let repaired = parse(modelOutput: insight.summary, modelName: insight.modelName)
-        guard repaired.summary != insight.summary
-            || !repaired.commonTriggers.isEmpty
-            || !repaired.notablePatterns.isEmpty else {
-            return insight
-        }
 
         return GeneratedLLMAnalyticsInsight(
             id: insight.id,
@@ -266,9 +629,25 @@ enum LocalLLMAnalyticsParser {
             generatedAt: insight.generatedAt,
             summary: repaired.summary,
             commonTriggers: repaired.commonTriggers,
-            notablePatterns: repaired.notablePatterns,
+            observedPatterns: repaired.observedPatterns,
+            parentRecommendations: repaired.parentRecommendations,
             parentReflectionPrompt: repaired.parentReflectionPrompt,
             ethicalNote: repaired.ethicalNote
+        )
+    }
+
+    private static func insight(from payload: ParsedPayload, modelName: String) -> GeneratedLLMAnalyticsInsight {
+        GeneratedLLMAnalyticsInsight(
+            modelName: modelName,
+            summary: payload.summary.isEmpty ? "The model found patterns in the selected logs." : payload.summary,
+            commonTriggers: payload.commonTriggers,
+            observedPatterns: payload.observedPatterns,
+            parentReflectionPrompt: payload.parentReflectionPrompt.isEmpty
+                ? "What pattern feels most useful to watch over the next few days?"
+                : payload.parentReflectionPrompt,
+            ethicalNote: payload.ethicalNote.isEmpty
+                ? "Model output is reflective and non-diagnostic."
+                : payload.ethicalNote
         )
     }
 
@@ -278,10 +657,12 @@ enum LocalLLMAnalyticsParser {
             return trimmed
         }
 
-        guard let start = trimmed.firstIndex(of: "{"),
-              let end = trimmed.lastIndex(of: "}"),
-              start <= end else {
+        guard let start = trimmed.firstIndex(of: "{") else {
             return trimmed
+        }
+
+        guard let end = trimmed.lastIndex(of: "}"), start <= end else {
+            return String(trimmed[start...])
         }
 
         return String(trimmed[start...end])
@@ -294,16 +675,162 @@ enum LocalLLMAnalyticsParser {
             || (trimmed.contains("\"summary\"") && trimmed.contains("\"commonTriggers\""))
     }
 
+    private static func fallbackSummary(from text: String) -> String {
+        if let summary = firstJSONString(forKey: "summary", in: text),
+           !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return summary
+        }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if looksLikeRawJSON(trimmed) {
+            return "The model returned incomplete analytics JSON. Try generating again with a smaller date range."
+        }
+
+        return trimmed.isEmpty ? "No summary was returned by the model." : trimmed
+    }
+
+    private static func salvagePayload(from text: String) -> ParsedPayload? {
+        let payload = ParsedPayload(
+            summary: firstJSONString(forKey: "summary", in: text) ?? "",
+            commonTriggers: decodeJSONObjectArray(named: "commonTriggers", in: text, as: GeneratedLLMCommonTrigger.self),
+            observedPatterns: decodeJSONObjectArray(named: "observedPatterns", in: text, as: GeneratedLLMObservedPattern.self)
+                + decodeJSONObjectArray(named: "notablePatterns", in: text, as: GeneratedLLMObservedPattern.self),
+            parentReflectionPrompt: firstJSONString(forKey: "parentReflectionPrompt", in: text) ?? "",
+            ethicalNote: firstJSONString(forKey: "ethicalNote", in: text) ?? ""
+        )
+
+        return payload.hasUsableContent ? payload : nil
+    }
+
+    private static func decodeJSONObjectArray<T: Decodable>(
+        named key: String,
+        in text: String,
+        as type: T.Type
+    ) -> [T] {
+        objectStrings(inArrayNamed: key, from: text).compactMap { objectString -> T? in
+            guard let data = objectString.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(type, from: data)
+        }
+    }
+
+    private static func objectStrings(inArrayNamed key: String, from text: String) -> [String] {
+        guard let keyRange = text.range(of: "\"\(key)\""),
+              let arrayStart = text[keyRange.upperBound...].firstIndex(of: "[") else {
+            return []
+        }
+
+        var objects: [String] = []
+        var depth = 0
+        var objectStart: String.Index?
+        var isInsideString = false
+        var isEscaped = false
+        var index = text.index(after: arrayStart)
+
+        while index < text.endIndex {
+            let character = text[index]
+
+            if isInsideString {
+                if isEscaped {
+                    isEscaped = false
+                } else if character == "\\" {
+                    isEscaped = true
+                } else if character == "\"" {
+                    isInsideString = false
+                }
+            } else {
+                if character == "\"" {
+                    isInsideString = true
+                } else if character == "{" {
+                    if depth == 0 {
+                        objectStart = index
+                    }
+                    depth += 1
+                } else if character == "}" {
+                    depth = max(0, depth - 1)
+                    if depth == 0, let start = objectStart {
+                        objects.append(String(text[start...index]))
+                        objectStart = nil
+                    }
+                } else if character == "]", depth == 0 {
+                    break
+                }
+            }
+
+            index = text.index(after: index)
+        }
+
+        return objects
+    }
+
+    private static func firstJSONString(forKey key: String, in text: String) -> String? {
+        let pattern = "\"\(NSRegularExpression.escapedPattern(for: key))\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\""
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        guard let match = regex.firstMatch(in: text, range: range),
+              match.numberOfRanges > 1 else {
+            return nil
+        }
+
+        let captured = nsText.substring(with: match.range(at: 1))
+        let jsonLiteral = "\"\(captured)\""
+        guard let data = jsonLiteral.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(String.self, from: data) else {
+            return captured
+        }
+
+        return decoded
+    }
+
+    private struct ParsedPayload {
+        let summary: String
+        let commonTriggers: [GeneratedLLMCommonTrigger]
+        let observedPatterns: [GeneratedLLMObservedPattern]
+        let parentReflectionPrompt: String
+        let ethicalNote: String
+
+        var hasUsableContent: Bool {
+            !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !commonTriggers.isEmpty
+                || !observedPatterns.isEmpty
+        }
+
+        init(
+            summary: String,
+            commonTriggers: [GeneratedLLMCommonTrigger],
+            observedPatterns: [GeneratedLLMObservedPattern],
+            parentReflectionPrompt: String,
+            ethicalNote: String
+        ) {
+            self.summary = summary
+            self.commonTriggers = commonTriggers
+            self.observedPatterns = observedPatterns
+            self.parentReflectionPrompt = parentReflectionPrompt
+            self.ethicalNote = ethicalNote
+        }
+
+        init(_ payload: Payload) {
+            self.init(
+                summary: payload.summary,
+                commonTriggers: payload.commonTriggers,
+                observedPatterns: payload.observedPatterns,
+                parentReflectionPrompt: payload.parentReflectionPrompt,
+                ethicalNote: payload.ethicalNote
+            )
+        }
+    }
+
     private struct Payload: Decodable {
         let summary: String
         let commonTriggers: [GeneratedLLMCommonTrigger]
-        let notablePatterns: [String]
+        let observedPatterns: [GeneratedLLMObservedPattern]
         let parentReflectionPrompt: String
         let ethicalNote: String
 
         private enum CodingKeys: String, CodingKey {
             case summary
             case commonTriggers
+            case observedPatterns
             case notablePatterns
             case parentReflectionPrompt
             case ethicalNote
@@ -313,7 +840,10 @@ enum LocalLLMAnalyticsParser {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
             commonTriggers = try container.decodeIfPresent([GeneratedLLMCommonTrigger].self, forKey: .commonTriggers) ?? []
-            notablePatterns = try container.decodeFlexibleStringArray(forKey: .notablePatterns)
+            let decodedObservedPatterns = try container.decodeFlexibleObservedPatternArray(forKey: .observedPatterns)
+            observedPatterns = decodedObservedPatterns.isEmpty
+                ? try container.decodeFlexibleObservedPatternArray(forKey: .notablePatterns)
+                : decodedObservedPatterns
             parentReflectionPrompt = try container.decodeIfPresent(String.self, forKey: .parentReflectionPrompt) ?? ""
             ethicalNote = try container.decodeIfPresent(String.self, forKey: .ethicalNote) ?? ""
         }
@@ -382,6 +912,29 @@ private extension KeyedDecodingContainer {
             return items
                 .map(\.value)
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+
+        return []
+    }
+
+    func decodeFlexibleObservedPatternArray(forKey key: Key) throws -> [GeneratedLLMObservedPattern] {
+        if let patterns = try? decodeIfPresent([GeneratedLLMObservedPattern].self, forKey: key) {
+            return patterns.filter {
+                !$0.displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+        }
+
+        if let strings = try? decodeIfPresent([String].self, forKey: key) {
+            return strings
+                .map {
+                    GeneratedLLMObservedPattern(
+                        title: "Evidence from Logs",
+                        evidence: $0
+                    )
+                }
+                .filter {
+                    !$0.evidence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
         }
 
         return []
@@ -851,9 +1404,10 @@ final class LocalModelLibrary: ObservableObject {
     }
 
     func saveGeneratedInsight(_ insight: GeneratedLLMAnalyticsInsight) {
-        generatedInsight = insight
-        Self.save(insight, key: Self.generatedInsightUserDefaultsKey)
-        lastMessage = "Generated analytics insight with \(insight.modelName)"
+        let repairedInsight = LocalLLMAnalyticsParser.repairFallbackInsight(insight)
+        generatedInsight = repairedInsight
+        Self.save(repairedInsight, key: Self.generatedInsightUserDefaultsKey)
+        lastMessage = "Generated analytics insight with \(repairedInsight.modelName)"
     }
 
     func clearGeneratedInsight() {
@@ -960,7 +1514,8 @@ final class LocalModelLibrary: ObservableObject {
 
         Task:
         Analyze these rows for a dashboard. Return JSON only using the schema from the system prompt.
-        Return bare JSON without markdown fences. `commonTriggers` must be objects with title and explanation. `notablePatterns` must be plain strings, not objects.
+        Return bare JSON without markdown fences. `commonTriggers` must be objects with title and explanation. `observedPatterns` must be evidence objects, not recommendations.
+        Do not include parent recommendations; the app chooses research-based recommendations from its curated catalog after parsing.
         Keep the response compact, complete, and under \(min(max(configuration.maxTokens, 128), 512)) output tokens.
         """
     }
@@ -1049,6 +1604,8 @@ final class LocalModelLibrary: ObservableObject {
         }
         if sanitized.systemPrompt.contains("\"dashboardFocus\"")
             || sanitized.systemPrompt.contains("\"chartSuggestions\"")
+            || sanitized.systemPrompt.contains("\"notablePatterns\"")
+            || !sanitized.systemPrompt.contains("\"observedPatterns\"")
             || !sanitized.systemPrompt.contains("\"commonTriggers\"") {
             sanitized.systemPrompt = LocalLLMConfiguration.defaultSystemPrompt
         }

@@ -148,6 +148,8 @@ final class LocalLLMModelTests: XCTestCase {
 
         XCTAssertTrue(prompt.contains("Return compact JSON only"))
         XCTAssertTrue(prompt.contains("commonTriggers"))
+        XCTAssertTrue(prompt.contains("observedPatterns"))
+        XCTAssertFalse(prompt.contains("notablePatterns"))
         XCTAssertTrue(prompt.contains("Analyze these rows for a dashboard"))
         XCTAssertFalse(prompt.contains("child-friendly sentence"))
     }
@@ -169,6 +171,7 @@ final class LocalLLMModelTests: XCTestCase {
         XCTAssertEqual(eventRows.count, 5)
         XCTAssertFalse(prompt.contains("System:"))
         XCTAssertTrue(prompt.contains("Keep the response compact"))
+        XCTAssertTrue(prompt.contains("curated catalog"))
     }
 
     func testParsesGeneratedAnalyticsJSON() throws {
@@ -182,7 +185,14 @@ final class LocalLLMModelTests: XCTestCase {
               "explanation": "Clean-up appears with angry or tired moods during evening transitions."
             }
           ],
-          "notablePatterns": ["Clean-up appears with angry or tired moods."],
+          "observedPatterns": [
+            {
+              "title": "Evening Clean-up",
+              "evidence": "Clean-up appears with angry or tired moods in evening home events.",
+              "linkedTrigger": "Clean-up",
+              "contextTags": ["Evening", "Home", "Angry"]
+            }
+          ],
           "parentReflectionPrompt": "Which evening transition could be made calmer tomorrow?",
           "ethicalNote": "Use this as reflection, not diagnosis."
         }
@@ -197,10 +207,14 @@ final class LocalLLMModelTests: XCTestCase {
             insight.commonTriggers.first?.explanation,
             "Clean-up appears with angry or tired moods during evening transitions."
         )
+        XCTAssertEqual(insight.observedPatterns.first?.title, "Evening Clean-up")
+        XCTAssertEqual(insight.observedPatterns.first?.linkedTrigger, "Clean-up")
+        XCTAssertTrue(insight.parentRecommendations.contains { $0.id == "emotion-coaching" })
+        XCTAssertTrue(insight.parentRecommendations.contains { $0.id == "calm-limits-choices" })
         XCTAssertEqual(insight.ethicalNote, "Use this as reflection, not diagnosis.")
     }
 
-    func testParsesFoundationModelsObjectNotablePatterns() throws {
+    func testParsesFoundationModelsObservedPatterns() throws {
         let output = """
         ```json
         {
@@ -211,14 +225,18 @@ final class LocalLLMModelTests: XCTestCase {
               "explanation": "Leo experiences heightened anxiety or excitement during bedtime stories."
             }
           ],
-          "notablePatterns": [
+          "observedPatterns": [
             {
               "title": "Excited Story Circle",
-              "explanation": "Leo is animated during school story circles."
+              "evidence": "Leo is animated during school story circles.",
+              "linkedTrigger": "Nighttime Activities",
+              "contextTags": ["School", "Excited"]
             },
             {
               "title": "Sad Drop-offs",
-              "explanation": "Mood shifts from happy to sad during school drop-offs."
+              "evidence": "Mood shifts from happy to sad during school drop-offs.",
+              "linkedTrigger": "Nighttime Activities",
+              "contextTags": ["School", "Sad"]
             }
           ],
           "parentReflectionPrompt": "How can you support transitions?",
@@ -231,11 +249,105 @@ final class LocalLLMModelTests: XCTestCase {
 
         XCTAssertEqual(insight.summary, "Leo's weekly mood patterns reveal a strong connection between nighttime activities and his emotional state.")
         XCTAssertEqual(insight.commonTriggers.first?.title, "Nighttime Activities")
-        XCTAssertEqual(insight.notablePatterns.count, 2)
-        XCTAssertEqual(
-            insight.notablePatterns.first,
-            "Excited Story Circle: Leo is animated during school story circles."
+        XCTAssertEqual(insight.observedPatterns.count, 2)
+        XCTAssertEqual(insight.observedPatterns.first?.displayText, "Excited Story Circle: Leo is animated during school story circles.")
+        XCTAssertTrue(insight.parentRecommendations.contains { $0.sourceLabels.contains("CDC") })
+    }
+
+    func testParsesTruncatedAnalyticsJSONWithoutRawSummary() throws {
+        let output = """
+        ```json
+        {
+          "summary": "Nighttime and transitions are the clearest stress points this week.",
+          "commonTriggers": [
+            {
+              "title": "Nighttime",
+              "explanation": "Bedtime stories appear near scared moods."
+            }
+          ],
+          "observedPatterns": [
+            {
+              "title": "Bedtime shadows",
+              "evidence": "Scared mood appeared during a bedtime story after asking about shadows.",
+              "linkedTrigger": "Nighttime",
+              "contextTags": ["Night", "Scared"]
+            }
+        ```
+        """
+
+        let insight = LocalLLMAnalyticsParser.parse(modelOutput: output, modelName: "Gemma-4-E2B-it")
+
+        XCTAssertEqual(insight.summary, "Nighttime and transitions are the clearest stress points this week.")
+        XCTAssertFalse(insight.summary.contains("\"summary\""))
+        XCTAssertEqual(insight.commonTriggers.first?.title, "Nighttime")
+        XCTAssertEqual(insight.observedPatterns.first?.title, "Bedtime shadows")
+        XCTAssertTrue(insight.parentRecommendations.contains { $0.id == "predictable-routines" })
+    }
+
+    func testMalformedAnalyticsFallbackDoesNotUseRawJSONAsRecommendationEvidence() throws {
+        let output = """
+        {
+          "summary": "Drop-off transitions seem harder after long mornings.",
+          "commonTriggers": [
+        """
+
+        let insight = LocalLLMAnalyticsParser.parse(modelOutput: output, modelName: "Gemma-4-E2B-it")
+
+        XCTAssertEqual(insight.summary, "Drop-off transitions seem harder after long mornings.")
+        XCTAssertFalse(insight.summary.contains("\"commonTriggers\""))
+        XCTAssertFalse(
+            insight.parentRecommendations.contains {
+                $0.basedOnEvidence.contains("\"summary\"") || $0.basedOnEvidence.contains("\"commonTriggers\"")
+            }
         )
+    }
+
+    func testParsesLegacyNotablePatternsIntoObservedPatterns() throws {
+        let output = """
+        {
+          "summary": "Transitions are harder when the day is long.",
+          "commonTriggers": [
+            {
+              "title": "Transition",
+              "explanation": "Screen-off and clean-up transitions appear with angry moods."
+            }
+          ],
+          "notablePatterns": ["Screen-off transition appears with angry moods after afternoon activities."],
+          "parentReflectionPrompt": "Which transition could be previewed tomorrow?",
+          "ethicalNote": "Reflective only."
+        }
+        """
+
+        let insight = LocalLLMAnalyticsParser.parse(modelOutput: output, modelName: "Gemma-4-E2B-it")
+
+        XCTAssertEqual(insight.observedPatterns.first?.title, "Evidence from Logs")
+        XCTAssertEqual(
+            insight.observedPatterns.first?.evidence,
+            "Screen-off transition appears with angry moods after afternoon activities."
+        )
+        XCTAssertTrue(insight.parentRecommendations.contains { $0.id == "predictable-routines" })
+        XCTAssertTrue(insight.parentRecommendations.contains { $0.id == "calm-limits-choices" })
+    }
+
+    func testParentRecommendationsFallbackWhenPatternsAreWeak() throws {
+        let insight = GeneratedLLMAnalyticsInsight(
+            modelName: "Apple Foundation Models",
+            summary: "There is a broad weekly pattern but the generated details are sparse.",
+            commonTriggers: [
+                GeneratedLLMCommonTrigger(
+                    title: "Nighttime",
+                    explanation: "Nighttime appears near scared moods."
+                )
+            ],
+            observedPatterns: [],
+            parentReflectionPrompt: "What helps bedtime feel predictable?",
+            ethicalNote: "Reflective only."
+        )
+
+        XCTAssertEqual(insight.parentRecommendations.count, 3)
+        XCTAssertEqual(insight.parentRecommendations.first?.id, "predictable-routines")
+        XCTAssertTrue(insight.parentRecommendations.contains { $0.id == "emotion-coaching" })
+        XCTAssertTrue(insight.parentRecommendations.contains { $0.id == "serve-return-connection" })
     }
 
     func testRepairsSavedRawJSONFallbackInsight() throws {
@@ -249,10 +361,12 @@ final class LocalLLMModelTests: XCTestCase {
               "explanation": "Clean-up follows long play sessions."
             }
           ],
-          "notablePatterns": [
+          "observedPatterns": [
             {
               "title": "Evening Fatigue",
-              "explanation": "Tired moods appear more in the evening."
+              "evidence": "Tired moods appear more in the evening.",
+              "linkedTrigger": "Clean-up",
+              "contextTags": ["Evening", "Tired"]
             }
           ],
           "parentReflectionPrompt": "Which transition could be softened?",
@@ -264,7 +378,7 @@ final class LocalLLMModelTests: XCTestCase {
             modelName: "Apple Foundation Models",
             summary: rawOutput,
             commonTriggers: [],
-            notablePatterns: [],
+            observedPatterns: [],
             parentReflectionPrompt: "What pattern feels most useful to watch over the next few days?",
             ethicalNote: "Model output is reflective and non-diagnostic."
         )
@@ -275,6 +389,7 @@ final class LocalLLMModelTests: XCTestCase {
         XCTAssertEqual(repaired.generatedAt, brokenInsight.generatedAt)
         XCTAssertEqual(repaired.summary, "Transitions are the clearest pattern.")
         XCTAssertEqual(repaired.commonTriggers.first?.title, "Clean-up")
-        XCTAssertEqual(repaired.notablePatterns.first, "Evening Fatigue: Tired moods appear more in the evening.")
+        XCTAssertEqual(repaired.observedPatterns.first?.displayText, "Evening Fatigue: Tired moods appear more in the evening.")
+        XCTAssertTrue(repaired.parentRecommendations.contains { $0.id == "predictable-routines" })
     }
 }

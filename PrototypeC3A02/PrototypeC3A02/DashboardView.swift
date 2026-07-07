@@ -42,7 +42,11 @@ struct DashboardView: View {
 
     private var generatedInsight: GeneratedLLMAnalyticsInsight? {
         guard !generatedInsightData.isEmpty else { return nil }
-        return try? JSONDecoder().decode(GeneratedLLMAnalyticsInsight.self, from: generatedInsightData)
+        guard let insight = try? JSONDecoder().decode(GeneratedLLMAnalyticsInsight.self, from: generatedInsightData) else {
+            return nil
+        }
+
+        return LocalLLMAnalyticsParser.repairFallbackInsight(insight)
     }
 
     private var selectedEngine: AnalysisEngine {
@@ -593,11 +597,12 @@ private struct ActivityCountChart: View {
 private struct GeneratedLLMInsightCard: View {
     let insight: GeneratedLLMAnalyticsInsight
     @State private var selectedTrigger: GeneratedLLMCommonTrigger?
+    @State private var selectedRecommendation: GeneratedLLMParentRecommendation?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
-                Label("Local LLM Insight", systemImage: "memorychip")
+                Label("Generated Insight", systemImage: "sparkles")
                     .font(.headline)
 
                 Spacer()
@@ -607,6 +612,9 @@ private struct GeneratedLLMInsightCard: View {
                     .foregroundStyle(.secondary)
             }
 
+            Label("Overall Insight", systemImage: "text.alignleft")
+                .font(.subheadline.weight(.semibold))
+
             Text(insight.summary)
                 .font(.body)
 
@@ -615,10 +623,14 @@ private struct GeneratedLLMInsightCard: View {
                 selectedTrigger: $selectedTrigger
             )
 
-            InsightBulletSection(
-                title: "Notable Patterns",
+            ObservedPatternsSection(
                 systemImage: "point.3.connected.trianglepath.dotted",
-                items: Array(insight.notablePatterns.prefix(3))
+                patterns: Array(insight.observedPatterns.prefix(3))
+            )
+
+            ParentRecommendationsSection(
+                recommendations: Array(insight.parentRecommendations.prefix(3)),
+                selectedRecommendation: $selectedRecommendation
             )
 
             Divider()
@@ -649,6 +661,28 @@ private struct GeneratedLLMInsightCard: View {
                 dismissButton: .default(Text("Done"))
             )
         }
+        .alert(item: $selectedRecommendation) { recommendation in
+            Alert(
+                title: Text(recommendation.title),
+                message: Text(recommendationAlertMessage(for: recommendation)),
+                dismissButton: .default(Text("Done"))
+            )
+        }
+    }
+
+    private func recommendationAlertMessage(for recommendation: GeneratedLLMParentRecommendation) -> String {
+        var parts = [
+            recommendation.whyItHelps,
+            "Based on: \(recommendation.basedOnTrigger)",
+            recommendation.basedOnEvidence,
+            "Sources: \(recommendation.sourceLabels.joined(separator: ", "))"
+        ]
+
+        if let sourceURL = recommendation.sourceURL, !sourceURL.isEmpty {
+            parts.append(sourceURL)
+        }
+
+        return parts.joined(separator: "\n\n")
     }
 }
 
@@ -691,31 +725,113 @@ private struct CommonTriggersSection: View {
     }
 }
 
-private struct InsightBulletSection: View {
-    let title: String
+private struct ObservedPatternsSection: View {
     let systemImage: String
-    let items: [String]
+    let patterns: [GeneratedLLMObservedPattern]
 
     var body: some View {
-        if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Label(title, systemImage: systemImage)
+        if !patterns.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Observed Patterns", systemImage: systemImage)
                     .font(.subheadline.weight(.semibold))
 
-                ForEach(items, id: \.self) { item in
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: "circle.fill")
-                            .font(.system(size: 5))
-                            .padding(.top, 7)
-                            .foregroundStyle(.secondary)
+                ForEach(patterns) { pattern in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(pattern.title)
+                            .font(.subheadline.weight(.semibold))
 
-                        Text(item)
+                        Text(pattern.evidence)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
+
+                        if !pattern.contextTags.isEmpty {
+                            HStack(spacing: 6) {
+                                ForEach(pattern.contextTags.prefix(4), id: \.self) { tag in
+                                    Text(tag)
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(.secondary.opacity(0.12))
+                                        .clipShape(Capsule())
+                                }
+                            }
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
+    }
+}
+
+private struct ParentRecommendationsSection: View {
+    let recommendations: [GeneratedLLMParentRecommendation]
+    @Binding var selectedRecommendation: GeneratedLLMParentRecommendation?
+
+    var body: some View {
+        if !recommendations.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Parent Recommendations", systemImage: "heart.text.square")
+                    .font(.subheadline.weight(.semibold))
+
+                ForEach(recommendations) { recommendation in
+                    ParentRecommendationRow(recommendation: recommendation)
+                        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .onTapGesture {
+                            selectedRecommendation = recommendation
+                        }
+                        .onLongPressGesture {
+                            selectedRecommendation = recommendation
+                        }
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityHint("Open the rationale and research source.")
+                }
+            }
+        }
+    }
+}
+
+private struct ParentRecommendationRow: View {
+    let recommendation: GeneratedLLMParentRecommendation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(recommendation.title)
+                    .font(.subheadline.weight(.semibold))
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(recommendation.action)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+
+            Text("Based on \(recommendation.basedOnTrigger)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                ForEach(recommendation.sourceLabels, id: \.self) { source in
+                    Text(source)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.blue)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.blue.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
