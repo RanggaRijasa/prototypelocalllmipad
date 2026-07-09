@@ -1,0 +1,1121 @@
+# .agents
+
+Project: Name-To-Be-Determined
+Purpose: Guide Codex / coding LLM agents to build an iOS/iPadOS app for guided storytelling analytics for first-time parents.
+
+This file is the project instruction source for coding agents. Follow it when creating, editing, reviewing, or refactoring code in this repository.
+
+## App Statement
+
+Build an iOS/iPadOS app that helps first-time parents understand their child's behavior by turning daily reflections into structured story data, dashboard analytics, and on-device generated insight.
+
+Primary user:
+
+- First-time parents with young children.
+- They need calm, practical, non-diagnostic observations.
+- They should be able to inspect story data, understand behavior patterns, and generate local on-device insight.
+
+Core assumption:
+
+- After Activity Notes are optional and are not reliably available.
+- End of Day Reflection is not optional but there is a chance it isn't given
+- Analytics must work when `AfterActivityNotes` and/or End of Day Reflection is nil, empty, or rarely provided.
+- The main analytics signal comes from structured data:
+  - child profile
+  - date
+  - scene/session
+  - place
+  - activity
+  - mood
+  - End of day reflection
+
+The app must never diagnose the child. Insights must be phrased as observations or possibilities.
+
+Use language such as:
+
+- "This may suggest..."
+- "A possible pattern is..."
+- "You may want to observe..."
+
+Avoid language such as:
+
+- "Your child has..."
+- "Your child is always..."
+- "This means your child..."
+
+## Technical Stack
+
+Use Apple-native technology unless the task explicitly requires otherwise.
+
+Required:
+
+- Swift
+- SwiftUI
+- SwiftData
+- Swift Charts
+- LiteRT-LM through vendored `CLiteRTLM.xcframework`
+- Local-first data storage
+- MVVM + Services + Repository architecture
+- On-device analytics and local model inference
+- Speech framework for voice notes
+
+Do not add server/backend dependencies.
+Do not require an internet connection for existing stored dashboard analytics.
+Do not send child data to external APIs.
+Do not put analytics logic directly inside SwiftUI Views.
+
+## Architecture Rule
+
+Use MVVM + Services + Repository.
+
+High-level flow:
+
+```text
+SwiftUI Views
+-> ViewModels
+-> Services / Repositories
+-> SwiftData / Local model runtime
+```
+
+Responsibilities:
+
+Views:
+
+- Render UI only.
+- Hold minimal UI state.
+- Trigger ViewModel actions.
+- Do not fetch SwiftData directly except in simple preview-only code.
+- Do not calculate analytics directly.
+- Do not start model downloads or model inference directly.
+
+ViewModels:
+
+- Own screen state.
+- Call repositories to load data.
+- Call services to process data.
+- Expose UI-ready values to Views.
+- Keep async work structured and cancellable where appropriate.
+- Convert technical errors into user-friendly UI messages.
+
+Repositories:
+
+- Encapsulate SwiftData access.
+- Provide fetch, insert, update, delete methods.
+- Keep persistence details out of ViewModels.
+- Store local model metadata only, never model binary content.
+
+Services:
+
+- Contain business logic, analytics logic, downloads, parsing, and runtime orchestration.
+- Must be protocol-based when there may be multiple implementations.
+- Examples:
+  - `RuleBasedAnalyticsService`
+  - `BehaviorPatternDetector`
+  - `LocalLLMService`
+  - `LocalModelDownloadService`
+  - `LocalModelStorage`
+
+Models:
+
+- Store domain entities and enums.
+- Must not contain UI rendering logic.
+- SwiftData models should remain simple and persistence-safe.
+
+## Required Feature Tabs
+
+Build exactly three main tabs:
+
+1. Story
+   - Purpose: Guide the parent through daily storytelling and structured activity logging.
+   - If no child profile exists, the first step must be creating a child profile with name, age, and gender.
+   - After profile setup, the parent chooses scene, location, activity, mood, and optional after-activity notes.
+   - The parent can add another activity in the same scene or move to another scene.
+   - When moving on from the nighttime scene, end-of-day reflection is required.
+   - This tab can also include a data explorer/history view, but guided storytelling is the primary flow.
+
+2. Dashboard
+   - Purpose: Show analytics cards, charts, pattern summaries, and generated insight.
+
+3. Models
+   - Purpose: Let the user download the single required local model, `Gemma-4-E2B-it`.
+   - This is not a model picker.
+   - The only user-facing action here is downloading the model. Insight generation happens from Dashboard.
+   - Loading, offloading, repair, deletion, diagnostics, and prompt/configuration are internal or development-only behaviors, not production user controls.
+
+## Recommended File Structure
+
+Use this structure unless there is a strong reason to change it.
+
+When Codex or another LLM agent is scaffolding this architecture, create the folders first and do not create empty placeholder files just because they are listed below. Create a file only when implementing its actual feature. Exception: the Local Model / LiteRT-LM implementation is critical, so those implementation files may be created together when wiring Gemma-4-E2B-it.
+
+```text
+AppName/
+|
+|-- App/
+|   |-- AppNameApp.swift
+|   |-- AppRouter.swift
+|   |-- AppConstants.swift
+|   `-- AppEnvironment.swift
+|
+|-- Models/
+|   |-- ChildProfile.swift
+|   |-- StorySession.swift
+|   |-- StoryEvent.swift
+|   |-- EndOfDayReflection.swift
+|   |-- UserLocation.swift
+|   |-- UserActivity.swift
+|   |-- UserImageAsset.swift
+|   |-- AudioNote.swift
+|   |-- MusicTrack.swift
+|   |-- DailySessionReport.swift
+|   |-- AnalyticsInsight.swift
+|   |-- AnalysisEngine.swift
+|   |
+|   |-- Enums/
+|   |   |-- Gender.swift
+|   |   |-- Mood.swift
+|   |   |-- SceneType.swift
+|   |   |-- PlaceType.swift
+|   |   |-- ActivityType.swift
+|   |   |-- AfterActivityNotesInputType.swift
+|   |   |-- UserImagePurpose.swift
+|   |   `-- AnalysisEngineType.swift
+|   |
+|   |-- LocalModel/
+|   |   |-- Gemma4E2BModel.swift
+|   |   |-- LocalModelInstallation.swift
+|   |   |-- LocalModelInstallationStatus.swift
+|   |   |-- LocalModelDownloadProgress.swift
+|   |   |-- LocalModelRuntimeState.swift
+|   |   `-- LocalLLMConfiguration.swift
+|   |
+|   `-- Recommendations/
+|       |-- ParentRecommendation.swift
+|       `-- RecommendationSource.swift
+|
+|-- Data/
+|   |-- SwiftData/
+|   |   |-- SwiftDataContainer.swift
+|   |   `-- SwiftDataSchema.swift
+|   |
+|   |-- Repositories/
+|   |   |-- StoryEventRepository.swift
+|   |   |-- ChildProfileRepository.swift
+|   |   |-- StorySessionRepository.swift
+|   |   |-- EndOfDayReflectionRepository.swift
+|   |   |-- UserLocationRepository.swift
+|   |   |-- UserActivityRepository.swift
+|   |   |-- UserImageAssetRepository.swift
+|   |   |-- AnalyticsInsightRepository.swift
+|   |   `-- LocalModelRepository.swift
+|   |
+|   `-- Seed/
+|       |-- DummyDataSeeder.swift
+|       `-- SevenDayStoryEventSeed.swift
+|
+|-- Features/
+|   |-- StorySection/
+|   |   |-- Views/
+|   |   |   |-- ChildProfileSetupView.swift
+|   |   |   |-- GuidedStoryHomeView.swift
+|   |   |   |-- SceneSelectionView.swift
+|   |   |   |-- LocationSelectionView.swift
+|   |   |   |-- CustomLocationEditorView.swift
+|   |   |   |-- ActivitySelectionView.swift
+|   |   |   |-- CustomActivityEditorView.swift
+|   |   |   |-- MoodSelectionView.swift
+|   |   |   |-- AfterActivityNotesView.swift
+|   |   |   |-- AddActivityOrMoveSessionView.swift
+|   |   |   |-- EndOfDayReflectionView.swift
+|   |   |   |-- DataExplorerView.swift
+|   |   |   |-- StoryEventListView.swift
+|   |   |   |-- StoryEventRowView.swift
+|   |   |   `-- StoryEventDetailView.swift
+|   |   |
+|   |   `-- ViewModels/
+|   |       |-- GuidedStoryViewModel.swift
+|   |       |-- ChildProfileSetupViewModel.swift
+|   |       |-- CustomLocationEditorViewModel.swift
+|   |       |-- CustomActivityEditorViewModel.swift
+|   |       |-- EndOfDayReflectionViewModel.swift
+|   |       `-- DataExplorerViewModel.swift
+|   |
+|   |-- Dashboard/
+|   |   |-- Views/
+|   |   |   |-- DashboardView.swift
+|   |   |   |-- InsightSummaryCard.swift
+|   |   |   |-- MoodBySceneChart.swift
+|   |   |   |-- MoodByPlaceChart.swift
+|   |   |   |-- ActivityMoodChart.swift
+|   |   |   |-- BehaviorPatternCard.swift
+|   |   |   |-- WeeklyTrendChart.swift
+|   |   |   |-- PossibleTriggerCard.swift
+|   |   |   |-- RecommendedSupportCard.swift
+|   |   |   |-- GenerateInsightSheet.swift
+|   |   |   `-- DownloadModelRequiredAlert.swift
+|   |   |
+|   |   `-- ViewModels/
+|   |       `-- DashboardViewModel.swift
+|   |
+|   `-- Model/
+|       |-- Views/
+|       |   |-- Gemma4E2BDownloadView.swift
+|       |   `-- ModelDownloadProgressView.swift
+|       |
+|       `-- ViewModels/
+|           `-- ModelDownloadViewModel.swift
+|
+|-- Services/
+|   |-- Analytics/
+|   |   |-- AnalyticsService.swift
+|   |   |-- RuleBasedAnalyticsService.swift
+|   |   |-- BehaviorPatternDetector.swift
+|   |   |-- InsightSummaryGenerator.swift
+|   |   |-- MoodScoringService.swift
+|   |   `-- ParentRecommendationService.swift
+|   |
+|   |-- StoryFlow/
+|   |   |-- GuidedStoryFlowService.swift
+|   |   |-- StorySessionService.swift
+|   |   |-- EndOfDayReflectionService.swift
+|   |   |-- LocationCatalogService.swift
+|   |   |-- ActivityCatalogService.swift
+|   |   `-- StoryEventBuilder.swift
+|   |
+|   |-- Media/
+|   |   |-- UserImageImportService.swift
+|   |   |-- UserImageStorage.swift
+|   |   |-- ImageThumbnailService.swift
+|   |   `-- PhotoLibraryPermissionService.swift
+|   |
+|   |-- Audio/
+|   |   |-- AudioSessionService.swift
+|   |   |-- AudioRecordingService.swift
+|   |   |-- AudioNoteService.swift
+|   |   |-- SpeechRecognitionService.swift
+|   |   |-- MusicPlaybackService.swift
+|   |   |-- AmbientMusicService.swift
+|   |   |-- SoundEffectService.swift
+|   |   `-- AudioPermissionService.swift
+|   |
+|   |-- LocalLLM/
+|   |   |-- Catalog/
+|   |   |   |-- Gemma4E2BManifest.swift
+|   |   |   |-- Gemma4E2BCompatibility.swift
+|   |   |   `-- Gemma4E2BLicenseInfo.swift
+|   |   |
+|   |   |-- Download/
+|   |   |   |-- LocalModelDownloadService.swift
+|   |   |   |-- LocalModelDownloadRequest.swift
+|   |   |   |-- LocalModelDownloadState.swift
+|   |   |   |-- LocalModelDownloadProgressTracker.swift
+|   |   |   |-- LocalModelResumeDataStore.swift
+|   |   |   `-- LocalModelDownloadError.swift
+|   |   |
+|   |   |-- Storage/
+|   |   |   |-- LocalModelStorage.swift
+|   |   |   |-- LocalModelFileValidator.swift
+|   |   |   |-- LocalModelChecksumValidator.swift
+|   |   |   |-- LocalModelMetadataStore.swift
+|   |   |   |-- LocalModelRepairService.swift
+|   |   |   `-- LocalModelDeletionService.swift
+|   |   |
+|   |   |-- Runtime/
+|   |   |   |-- LocalLLMRuntimeSession.swift
+|   |   |   |-- LiteRTLMAnalyticsRuntime.swift
+|   |   |   |-- LiteRTLMEngineFactory.swift
+|   |   |   |-- LiteRTLMConversationFactory.swift
+|   |   |   |-- LocalLLMMemoryManager.swift
+|   |   |   `-- LocalLLMRuntimeError.swift
+|   |   |
+|   |   |-- Prompting/
+|   |   |   |-- AnalyticsSystemPrompt.swift
+|   |   |   |-- AnalyticsContextBuilder.swift
+|   |   |   |-- AnalyticsPromptBuilder.swift
+|   |   |   `-- AnalyticsPromptBudget.swift
+|   |   |
+|   |   |-- Parsing/
+|   |   |   |-- AnalyticsInsightParser.swift
+|   |   |   |-- AnalyticsInsightRepairer.swift
+|   |   |   |-- AnalyticsInsightSchema.swift
+|   |   |   `-- AnalyticsInsightParseError.swift
+|   |   |
+|   |   |-- Recommendations/
+|   |   |   |-- ParentRecommendationCatalog.swift
+|   |   |   |-- ParentRecommendationMatcher.swift
+|   |   |   `-- ParentRecommendationSourceCatalog.swift
+|   |   |
+|   |   |-- Vendor/
+|   |   |   |-- Frameworks/
+|   |   |   |   `-- CLiteRTLM.xcframework
+|   |   |   |
+|   |   |   `-- Swift/
+|   |   |       |-- Engine.swift
+|   |   |       |-- Conversation.swift
+|   |   |       |-- Config.swift
+|   |   |       |-- Message.swift
+|   |   |       |-- ExperimentalFlags.swift
+|   |   |       |-- LiteRTLMError.swift
+|   |   |       `-- Capabilities.swift
+|   |   |
+|   |   `-- LocalLLMService.swift
+|   |
+|   `-- Speech/
+|       `-- SpeechTranscriptionService.swift
+|
+|-- Shared/
+|   |-- Components/
+|   |-- Extensions/
+|   |-- Theme/
+|   `-- Utilities/
+|
+|-- Resources/
+|   |-- Assets.xcassets
+|   |-- Preview Content/
+|   |-- Audio/
+|   |   |-- AmbientMusic/
+|   |   `-- SoundEffects/
+|   `-- LocalModels/
+|       |-- Gemma4E2BManifest.json
+|       `-- Gemma4E2BLicense.md
+|
+`-- Tests/
+    |-- AnalyticsServiceTests.swift
+    |-- StoryEventRepositoryTests.swift
+    |-- GuidedStoryFlowTests.swift
+    |-- EndOfDayReflectionTests.swift
+    |-- UserLocationActivityTests.swift
+    |-- UserImageStorageTests.swift
+    |-- AudioServiceTests.swift
+    |-- LocalModelDownloadTests.swift
+    |-- LocalModelStorageTests.swift
+    |-- LocalLLMRuntimeTests.swift
+    |-- AnalyticsInsightParserTests.swift
+    |-- ParentRecommendationMatcherTests.swift
+    `-- DashboardGenerateInsightTests.swift
+```
+
+## Local LLM Rules
+
+This is the most important implementation area.
+
+The production app supports exactly one local LLM model:
+
+```text
+Name: Gemma-4-E2B-it
+Runtime: LiteRT-LM
+Format: .litertlm
+Hugging Face repo: litert-community/gemma-4-E2B-it-litert-lm
+File: gemma-4-E2B-it.litertlm
+Approx size: 2.58 GB
+Approx peak memory: 8.59 GB
+```
+
+Rules:
+
+- Do not add a model picker in production.
+- Do not expose E4B, Gemma-3, Qwen, MLC, Core ML model choices, or server model choices.
+- The Models tab is a Gemma-4-E2B-it download screen only.
+- The only production user-facing local model actions are:
+  - download Gemma-4-E2B-it
+  - generate insight from Dashboard
+- The Dashboard must show a download-required alert if the user taps `Generate Insight` before Gemma-4-E2B-it is installed.
+- Do not auto-download the model without explicit user confirmation.
+- Do not bundle the 2.58 GB `.litertlm` file in the app binary.
+- `Resources/LocalModels/` may contain manifest/license files only.
+- Store downloaded model files in Application Support or Documents.
+- Store only metadata/path/checksum/status in SwiftData.
+- Never store large binary model content in SwiftData.
+- Do not send child data to external APIs.
+
+Download-required alert copy:
+
+```text
+Title:
+Download Gemma-4-E2B-it First
+
+Message:
+On-device insight generation needs the Gemma-4-E2B-it model before it can run. The download is about 2.58 GB and stays on this iPhone or iPad.
+
+Primary button:
+Download Model
+
+Secondary button:
+Cancel
+```
+
+Generate flow:
+
+```text
+Generate Insight tapped
+-> Check Gemma-4-E2B-it installation
+-> If missing, show DownloadModelRequiredAlert and stop
+-> If installed, select data scope: all, weekly, or date
+-> Build analytics prompt
+-> Internally load model through LiteRT-LM
+-> Generate compact JSON insight
+-> Parse/repair output
+-> Match parent recommendations from curated catalog
+-> Save insight
+-> Internally offload model from memory
+```
+
+## LiteRT-LM Dependency Rules
+
+Do not attach SwiftPM product `LiteRTLM` directly to the app target.
+
+Even if the dependency URL is official, Xcode can reject the SwiftPM product because it uses unsafe linker/build flags.
+
+Known error:
+
+```text
+The package product 'LiteRTLM' cannot be used as a dependency of this target because it uses unsafe build flags.
+```
+
+Required fix:
+
+- Vendor official LiteRT-LM runtime pieces locally.
+- Link and embed `CLiteRTLM.xcframework`.
+- Copy Google's Swift wrapper sources into `Services/LocalLLM/Vendor/Swift`.
+- Runtime code must import `CLiteRTLM`, not `LiteRTLM`.
+- Remove stale `Package.resolved` after removing the Swift Package dependency.
+- Run a clean Xcode build after vendoring the framework.
+
+Xcode target requirements:
+
+- `CLiteRTLM.xcframework` is in Link Binary With Libraries.
+- `CLiteRTLM.xcframework` is in Embed Frameworks.
+- Embed setting is `Embed & Sign`.
+- Vendored Swift wrapper files are included in the app target.
+- Simulator and device slices exist:
+  - `ios-arm64`
+  - `ios-arm64-simulator`
+
+## Local LLM Runtime Rules
+
+The local LLM runtime is not a chatbot. It is an analytics engine for dashboard insight.
+
+The runtime must:
+
+- Load Gemma-4-E2B-it only when needed.
+- Generate insight from structured story rows.
+- Return compact JSON only.
+- Release model references after generation.
+- Offload on app background.
+- Offload on memory warning.
+- Cancel generation safely if needed.
+- Avoid keeping raw LLM output in memory longer than necessary.
+
+Memory lifecycle:
+
+```text
+load
+-> generate
+-> parse compact insight
+-> save compact insight
+-> cancel conversation if needed
+-> nil conversation
+-> nil engine
+-> offloaded state
+```
+
+Do not keep the model loaded indefinitely in production. Do not expose manual load/offload controls to production users. The normal app flow should load just-in-time and offload after generation.
+
+## Prompting Rules
+
+System prompt must instruct the model to:
+
+- Act as an on-device storytelling analytics engine.
+- Analyze parent-logged child story events.
+- Produce dashboard-ready insight only.
+- Not chat with the parent.
+- Not diagnose, label, or make medical claims.
+- Prefer concrete patterns from supplied rows.
+- Not invent research claims.
+- Not generate free-form parenting science claims.
+- Return compact JSON only.
+
+Required output schema:
+
+```json
+{
+  "summary": "One concise paragraph with the overall insight. Do not repeat every pattern here.",
+  "commonTriggers": [
+    {
+      "title": "One short trigger label.",
+      "explanation": "Grounded explanation using only supplied rows."
+    }
+  ],
+  "observedPatterns": [
+    {
+      "title": "Short evidence label, not a recommendation.",
+      "evidence": "Concrete observation tied to count, scene, place, mood, time, activity, reason, or note.",
+      "linkedTrigger": "Optional title from commonTriggers.",
+      "contextTags": ["Optional short tags from rows"]
+    }
+  ],
+  "parentReflectionPrompt": "One gentle non-diagnostic question for the parent.",
+  "ethicalNote": "A short privacy and non-diagnosis reminder."
+}
+```
+
+Prompt budget:
+
+- Limit events per generation.
+- Prefer up to 24 events for primary prompt.
+- Retry with smaller prompt, around 10 events, if generation fails.
+- Keep output token budget modest.
+- Do not request long prose from the model.
+
+## Parent Recommendation Rules
+
+The model must not freely invent science-based parenting recommendations.
+
+Correct design:
+
+- LLM identifies:
+  - `summary`
+  - `commonTriggers`
+  - `observedPatterns`
+  - `parentReflectionPrompt`
+  - `ethicalNote`
+- App selects `ParentRecommendation` from a curated in-app catalog.
+- Recommendation matching is based primarily on common triggers, then observed patterns, then summary.
+
+Allowed source labels:
+
+- CDC
+- AAP
+- Harvard
+
+Recommendation cards should show:
+
+- title
+- action
+- source labels
+- based-on trigger/evidence
+- tap or long-press explanation popup
+
+Recommendations are not diagnosis, therapy, or medical advice.
+
+## SwiftData Rules
+
+Use SwiftData for:
+
+- ChildProfile
+- StoryEvent
+- AnalyticsInsight if persisted
+- LocalModelInstallation metadata
+
+Do not store large model binaries inside SwiftData.
+
+Rules:
+
+- Define persistent entities with `@Model`.
+- Keep model relationships simple.
+- Use repositories to isolate `ModelContext`.
+- Seed dummy data only once unless user explicitly resets data.
+- Provide reset seed action for development/debugging.
+
+Minimum dummy data:
+
+- At least 7 days.
+- Each day should include 5-10 events.
+- Each day should include morning, afternoon, evening, and night events.
+- Include places: home, school, park/playground, car, restaurant/other.
+- Include activities: breakfast, learning, playing, resting, outdoor play, screen time, bedtime, family time.
+- Include moods: happy, sad, angry, tired, excited, scared, confused, calm.
+- Parent notes should mostly be nil or empty.
+
+## Analytics Rules
+
+Dashboard must work from structured data only.
+
+Parent note can improve insight if available, but must not be required.
+
+Rule-based analytics must remain available as a deterministic fallback for charts and baseline summaries. Local LLM enhances generated insight, but base dashboard analytics should still render without downloading the model.
+
+Analytics to implement:
+
+- Mood distribution.
+- Mood by scene.
+- Mood by place.
+- Mood by activity.
+- Weekly mood trend.
+- Repeated negative mood moments.
+- Common trigger candidates based on repeated scene/place/activity + mood patterns.
+- Observed patterns with concrete evidence.
+- Parent recommendations selected from curated catalog.
+
+Mood scoring:
+
+- happy: 4
+- excited: 4
+- calm: 3
+- confused: 2
+- tired: 2
+- sad: 1
+- scared: 1
+- angry: 1
+
+Do not present mood score as a clinical metric. Use it only internally for trend charts.
+
+Good insight wording:
+
+```text
+Leo often seems tired during evening activities, especially after outdoor play. This may suggest that late-day transitions need a gentler routine.
+```
+
+Bad insight wording:
+
+```text
+Leo has behavior problems in the evening.
+```
+
+## UI Principles
+
+Design language:
+
+- Warm, calm, child-friendly.
+- Friendly for parents, not childish.
+- Clean and readable.
+- Soft cards where useful.
+- Large readable typography.
+- Avoid a cold corporate dashboard feel.
+
+Dashboard should emphasize behavior understanding, not just mood tracking.
+
+Use section names like:
+
+- Overall Insight
+- Common Triggers
+- Observed Patterns
+- Parent Recommendations
+- Reflection
+
+Dashboard generate UX:
+
+- `Generate Insight` lives in Dashboard.
+- User chooses data scope:
+  - all data
+  - weekly data
+  - selected date
+- Show loading animation during generation.
+- Disable duplicate generation while busy.
+- If model is missing, show download-required alert.
+- Do not show raw JSON in production UI.
+
+Models tab UX:
+
+- Do not show multiple model choices.
+- Show a short explanation that Gemma-4-E2B-it is required for on-device generated insight.
+- Show a `Download Model` button when the model is missing.
+- Show download progress.
+- Show a simple installed confirmation when download is complete.
+- Do not show load/offload controls.
+- Do not show delete/redownload controls.
+- Do not show prompt/context configuration.
+- Do not show diagnostics in production UI.
+
+## Feature Acceptance Criteria
+
+Story tab is complete when:
+
+- If no profile exists, the user must create a child profile with name, age, and gender before logging.
+- User can start or continue today's guided story.
+- User can choose scene, location, activity, and mood.
+- User can add optional after-activity notes.
+- User can add another activity in the same scene or move to another scene.
+- Moving on from nighttime requires end-of-day reflection.
+- User can add custom location with uploaded image.
+- User can add custom activity with uploaded image.
+- User can see logged StoryEvent records.
+- User can filter or inspect by date/scene/mood/place/activity.
+- Detail screen shows all fields including optional after-activity note.
+- Seed data covers at least 7 days with 5-10 events per day.
+
+Dashboard tab is complete when:
+
+- It reads StoryEvent data from repository.
+- It displays at least 5 analytics sections.
+- It generates rule-based analytics without parent notes.
+- It can generate local LLM insight after Gemma-4-E2B-it is installed.
+- It shows the download-required alert if Gemma-4-E2B-it is missing.
+- It uses non-diagnostic language.
+- It handles empty data gracefully.
+- It offloads the model after generation.
+
+Models tab is complete when:
+
+- It exposes only Gemma-4-E2B-it.
+- It lets the user download Gemma-4-E2B-it.
+- It shows simple missing/downloading/installed/failed states.
+- It can start and retry download.
+- It persists installation metadata.
+- It validates file presence and size.
+- It does not use SwiftPM `LiteRTLM` package product.
+
+## Testing Rules
+
+Add tests for logic-heavy code.
+
+Required tests:
+
+- Dummy seed creates at least 7 days of events.
+- Dummy seed creates 5-10 events per day.
+- StoryEventRepository can fetch seeded data.
+- Story tab requires child profile setup when no profile exists.
+- GuidedStoryFlowService creates StoryEvent from scene/location/activity/mood.
+- GuidedStoryFlowService supports multiple activities in one scene.
+- EndOfDayReflectionService requires reflection when moving on from nighttime.
+- Custom location creation stores image path/metadata, not SwiftData binary blob.
+- Custom activity creation stores image path/metadata, not SwiftData binary blob.
+- AudioNoteService stores audio path/metadata, not SwiftData binary blob.
+- MusicPlaybackService can be muted and does not block story logging.
+- RuleBasedAnalyticsService returns summary without parent notes.
+- BehaviorPatternDetector detects repeated mood patterns.
+- InsightSummaryGenerator avoids diagnostic wording.
+- LocalModelStorage does not store binary content in SwiftData.
+- Gemma-4-E2B-it catalog/manifest has correct ID, filename, size, and runtime.
+- Production model UI exposes only Gemma-4-E2B-it.
+- Download-required alert appears when generate is tapped and model is missing.
+- Local model download can resume partial files.
+- Local model metadata can repair from existing file.
+- AnalyticsInsightParser parses valid JSON.
+- AnalyticsInsightParser does not render raw JSON as summary.
+- ParentRecommendationMatcher returns curated recommendations from triggers/patterns.
+- Runtime offload is called after generation success and failure.
+
+Avoid snapshot tests unless requested.
+Prefer deterministic dummy data for tests.
+
+## Implementation Order for Codex
+
+Build in this order:
+
+1. Create app shell with three tabs.
+2. Add domain models and enums, including child profile, story session, custom location/activity, image asset, audio note, and end-of-day reflection.
+3. Add SwiftData container/schema.
+4. Add repository protocols and SwiftData implementations.
+5. Add image storage and media metadata services.
+6. Add audio note and optional music playback services.
+7. Add deterministic 7-day dummy data seeder with 5-10 events per day.
+8. Build Story tab with profile setup and guided storytelling flow.
+9. Build custom location/activity creation with uploaded images.
+10. Build required nighttime end-of-day reflection flow.
+11. Build analytics service protocol and rule-based analytics.
+12. Build Dashboard ViewModel.
+13. Build Dashboard UI cards and charts.
+14. Build curated parent recommendation catalog/matcher.
+15. Build Model tab for Gemma-4-E2B-it download only.
+16. Add local model download/storage/repair.
+17. Add LiteRT-LM vendored dependency wiring.
+18. Add local LLM runtime session.
+19. Add prompt builder/parser/repairer.
+20. Add Dashboard generate insight flow with download-required alert.
+21. Add model load/generate/offload memory lifecycle.
+22. Add tests.
+23. Polish UI copy and empty/error states.
+
+Do not start with free-form chatbot UI. This app needs analytics insight, not chat.
+
+## Guided Storytelling Rules
+
+Guided storytelling is the primary user journey. The app is not only a data viewer.
+
+First-run rule:
+
+- If no `ChildProfile` exists, the Story tab must show profile setup before any story logging.
+- Required child profile fields:
+  - name
+  - age
+  - gender
+- After the profile is saved, the parent can start today's guided story.
+
+Daily guided flow:
+
+```text
+Start / Continue Today's Story
+-> Ensure child profile exists
+-> Choose scene: morning, afternoon, evening, night
+-> Choose location
+-> Optionally add custom location with uploaded image
+-> Choose activity
+-> Optionally add custom activity with uploaded image
+-> Choose mood
+-> Add optional after-activity notes
+-> Save StoryEvent
+-> Add another activity in this scene OR move to another scene
+-> If moving on from nighttime, require end-of-day reflection
+```
+
+Scene rules:
+
+- Scene values should map to the parent-facing moments:
+  - morning / pagi
+  - afternoon / siang
+  - evening / sore
+  - night / malam
+- A day can have multiple activities per scene.
+- Each activity log becomes a structured `StoryEvent`.
+- The parent can add another activity before moving to the next scene.
+
+After-activity notes:
+
+- Optional for every activity.
+- Can be text and, if audio recording is implemented, audio.
+- Analytics must work when this field is empty.
+
+End-of-day reflection:
+
+- Required when the parent taps `Move On` from the nighttime scene.
+- Do not allow completing the day from nighttime without an end-of-day reflection.
+- Reflection can be text and, if audio recording is implemented, audio.
+- The reflection should be saved separately from individual activity notes as `EndOfDayReflection`.
+- The reflection may be used as additional context for insight, but analytics must still rely primarily on structured activity rows.
+
+## Custom Location and Activity Rules
+
+The app must support built-in and user-created locations and activities.
+
+Custom location:
+
+- User can add a location name.
+- User can upload or choose an image for that location.
+- Store the image in app file storage, not SwiftData binary blobs.
+- SwiftData stores metadata/path/thumbnail reference only.
+
+Custom activity:
+
+- User can add an activity name.
+- User can upload or choose an image for that activity.
+- Store the image in app file storage, not SwiftData binary blobs.
+- SwiftData stores metadata/path/thumbnail reference only.
+
+Historical data rule:
+
+- If a custom location or activity is edited later, existing story events should keep enough snapshot data to remain understandable.
+- A `StoryEvent` should preserve display name and image reference/snapshot metadata used at logging time when needed.
+
+Privacy rule:
+
+- User-uploaded images stay on device.
+- Do not upload custom location/activity images to a server.
+
+## Audio and Music Rules
+
+Audio and music are supporting experience layers, not analytics requirements.
+
+Audio notes:
+
+- After-activity notes may support audio recording.
+- End-of-day reflection may support audio recording.
+- Text input must remain available.
+- If speech transcription is added, it must run on device where possible.
+- The raw audio file should be stored in app file storage.
+- SwiftData stores metadata/path/duration/transcript only.
+
+Music:
+
+- Ambient music may be used during guided storytelling to make the experience calmer.
+- Use bundled or locally stored music assets.
+- Do not require streaming.
+- Respect silent mode, interruptions, and system audio session behavior.
+- Music must never block story logging.
+- Music must be optional and easy to mute.
+
+Audio architecture should use services:
+
+- `AudioSessionService`
+- `AudioRecordingService`
+- `AudioNoteService`
+- `MusicPlaybackService`
+- `AmbientMusicService`
+- `SoundEffectService`
+- `AudioPermissionService`
+
+## Forbidden Shortcuts
+
+Do not:
+
+- Put database queries inside DashboardView.
+- Put analytics calculations inside SwiftUI chart Views.
+- Require after-activity notes for story logging or analytics.
+- Store downloaded model binaries in SwiftData.
+- Bundle the 2.58 GB `.litertlm` model file in the app binary.
+- Hardcode every insight directly in the View.
+- Show raw JSON in production UI.
+- Use diagnostic or medical language.
+- Add network APIs for child data.
+- Make a backend.
+- Add a model picker.
+- Add alternative model cards in production.
+- Add production user controls for load/offload/delete/redownload/prompt configuration.
+- Skip child profile setup when no profile exists.
+- Let the user complete nighttime `Move On` without end-of-day reflection.
+- Treat after-activity notes as required.
+- Store uploaded custom location/activity images as SwiftData binary blobs.
+- Upload user custom images or audio notes to a server.
+- Attach SwiftPM product `LiteRTLM` directly to the app target.
+- Import rejected package product `LiteRTLM`.
+- Replace SwiftData with another database without explicit instruction.
+- Replace SwiftUI with UIKit unless needed for a specific system API wrapper.
+
+## Recommended Protocols
+
+Use protocols for swappable components and tests.
+
+```swift
+protocol StoryEventRepositoryProtocol {
+    func fetchAllEvents() throws -> [StoryEvent]
+    func fetchEventsLast7Days() throws -> [StoryEvent]
+    func fetchEvents(on date: Date) throws -> [StoryEvent]
+    func insert(_ event: StoryEvent) throws
+    func delete(_ event: StoryEvent) throws
+    func deleteAll() throws
+}
+
+protocol GuidedStoryFlowServiceProtocol {
+    func startToday(for child: ChildProfile) async throws -> StorySession
+    func logActivity(
+        scene: SceneType,
+        location: UserLocation,
+        activity: UserActivity,
+        mood: Mood,
+        afterActivityNotes: String?,
+        audioNote: AudioNote?
+    ) async throws -> StoryEvent
+    func moveToNextScene(from scene: SceneType) async throws
+    func completeNighttime(with reflection: EndOfDayReflection) async throws
+}
+
+protocol UserLocationRepositoryProtocol {
+    func fetchBuiltInAndCustomLocations() throws -> [UserLocation]
+    func saveCustomLocation(_ location: UserLocation) throws
+}
+
+protocol UserActivityRepositoryProtocol {
+    func fetchBuiltInAndCustomActivities() throws -> [UserActivity]
+    func saveCustomActivity(_ activity: UserActivity) throws
+}
+
+protocol UserImageStorageProtocol {
+    func saveImage(data: Data, purpose: UserImagePurpose) async throws -> UserImageAsset
+    func deleteImage(_ asset: UserImageAsset) async throws
+}
+
+protocol AudioNoteServiceProtocol {
+    func startRecording() async throws
+    func stopRecording() async throws -> AudioNote
+    func deleteAudioNote(_ note: AudioNote) async throws
+}
+
+protocol MusicPlaybackServiceProtocol {
+    func playAmbientMusic(_ track: MusicTrack) async
+    func stopAmbientMusic() async
+    func setMuted(_ isMuted: Bool) async
+}
+
+protocol AnalyticsServiceProtocol {
+    func buildDashboard(from events: [StoryEvent]) -> DashboardAnalysisResult
+    func generateSummary(from events: [StoryEvent]) -> String
+    func detectPatterns(from events: [StoryEvent]) -> [AnalyticsInsight]
+    func generateRecommendations(from insight: AnalyticsInsight) -> [ParentRecommendation]
+}
+
+protocol LocalModelRepositoryProtocol {
+    func fetchGemma4E2BInstallation() throws -> LocalModelInstallation?
+    func saveGemma4E2BInstallation(_ installation: LocalModelInstallation) throws
+    func clearGemma4E2BInstallation() throws
+}
+
+protocol LocalModelDownloadServiceProtocol {
+    func downloadGemma4E2B() async throws -> LocalModelInstallation
+    func cancelDownload()
+    func resumeDownload() async throws -> LocalModelInstallation
+}
+
+protocol LocalLLMServiceProtocol {
+    func isGemma4E2BInstalled() async -> Bool
+    func loadGemma4E2B(configuration: LocalLLMConfiguration) async throws
+    func generateAnalyticsInsight(prompt: String) async throws -> String
+    func offload() async
+}
+```
+
+## Output Style for Coding Agents
+
+These rules apply to Codex and any other coding LLM agent working on this project.
+
+When generating or editing code:
+
+- Include complete files, not fragments, unless asked.
+- Mention where each file should be placed.
+- Keep names consistent with this `.agents` file.
+- Prefer compiling code over theoretical code.
+- When uncertain about a framework API, isolate it behind a service and mark the uncertain part clearly as TODO.
+- Do not invent third-party APIs.
+- Do not add package dependencies unless explicitly requested.
+- For LiteRT-LM, use vendored `CLiteRTLM.xcframework` and local Swift wrapper sources.
+- Preserve privacy and non-diagnostic wording.
+
+## Clean Code Rules
+
+Code should be understandable, maintainable, and split by responsibility.
+
+File structure and separation:
+
+- Do not put many unrelated features into one large file.
+- Split code by feature and responsibility: Views, ViewModels, Services, Repositories, Models, and Utilities.
+- Keep SwiftUI Views focused on rendering and user interaction.
+- Keep business logic in Services.
+- Keep persistence logic in Repositories.
+- Keep reusable UI in Shared Components.
+- Extract subviews when a View becomes hard to scan.
+- Extract service methods when a function is doing more than one job.
+
+Naming:
+
+- Use clear, descriptive names for types, functions, variables, and parameters.
+- Prefer names that explain intent, not implementation detail.
+- Avoid vague names such as `data`, `item`, `thing`, `manager`, `helper`, or `temp` unless the scope is truly generic and obvious.
+- Boolean names should read naturally, such as `isGenerating`, `hasInstalledModel`, or `shouldShowDownloadAlert`.
+- Function names should describe the action and result, such as `fetchEvents(for:)`, `buildAnalyticsPrompt(from:)`, or `saveCustomLocationImage(_:)`.
+
+Comments:
+
+- Add comments only where they clarify intent, constraints, or non-obvious behavior.
+- Keep comments short and plain.
+- Do not write comments that repeat the code line by line.
+- Use comments to explain why something exists, not what every simple statement does.
+- Mark temporary uncertainty with a specific TODO that names the missing decision or API.
+
+Constants and magic values:
+
+- Do not scatter magic numbers or hardcoded strings through implementation code.
+- Put repeated numeric values, limits, filenames, UserDefaults keys, and storage paths in named constants.
+- Give constants meaningful names, such as `maximumPrimaryPromptEvents`, `gemma4E2BFileName`, or `downloadProgressUpdateInterval`.
+- Keep user-facing copy in a consistent location when it is reused.
+
+Reuse and abstraction:
+
+- Avoid single-use abstractions that make code harder to read.
+- Avoid copy-pasting repeated logic.
+- Extract helpers when the same logic is used more than once or when extraction makes a complex flow easier to understand.
+- Prefer small, concrete services over large generic managers.
+- Do not over-engineer protocols for code that has only one simple implementation unless tests or future swapping genuinely need it.
+
+State and errors:
+
+- Keep UI state in ViewModels, not deep inside Views.
+- Keep async tasks cancellable where the user can navigate away or retry.
+- Use typed errors for important domain failures.
+- Convert technical errors into user-friendly messages at the ViewModel/UI boundary.
+- Never hide errors silently unless there is a deliberate fallback.
+
+Testing and verification:
+
+- Add focused tests for parsing, matching, persistence, download state, and analytics logic.
+- Prefer deterministic fixtures over random test data.
+- Test edge cases: empty events, missing child profile, missing model, partial model download, malformed LLM JSON, and missing after-activity notes.
+- Run the smallest useful test/build command after meaningful implementation changes when feasible.
